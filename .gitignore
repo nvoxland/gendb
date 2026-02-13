@@ -1,0 +1,6 @@
+bin/
+autodb.yaml
+*.exe
+.DS_Store
+.idea
+site
