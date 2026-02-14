@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -17,8 +16,6 @@ import (
 type Proxy struct {
 	listenAddr string
 	realAddr   string
-	key        string
-	state      *lang.State
 	executor   *lang.Executor
 	listener   net.Listener
 	ready      chan struct{}
@@ -27,9 +24,7 @@ type Proxy struct {
 }
 
 type session struct {
-	mode          string            // per-session mode override ("" = use global)
-	backendConn   net.Conn          // backend connection for search_path injection
-	currentPath   string            // current search_path setting
+	backendConn   net.Conn          // backend connection
 	startupParams map[string]string // from StartupMessage.Parameters
 	pgxConn       *pgx.Conn         // reused across generate_data calls
 
@@ -53,12 +48,10 @@ type Config struct {
 }
 
 // New creates a new proxy.
-func New(cfg Config, state *lang.State, executor *lang.Executor) *Proxy {
+func New(cfg Config, executor *lang.Executor) *Proxy {
 	return &Proxy{
 		listenAddr: cfg.ListenAddr,
 		realAddr:   cfg.RealAddr,
-		key:        cfg.Key,
-		state:      state,
 		executor:   executor,
 		ready:      make(chan struct{}),
 		sessions:   make(map[net.Conn]*session),
@@ -76,7 +69,6 @@ func (p *Proxy) Start(ctx context.Context) error {
 
 	fmt.Printf("AutoDB proxy listening on %s\n", p.listenAddr)
 	fmt.Printf("  Real DB: %s\n", p.realAddr)
-	fmt.Printf("  Key: %s\n", p.key)
 
 	go func() {
 		<-ctx.Done()
@@ -181,72 +173,8 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 		return
 	}
 
-	// Inject initial search_path based on current mode
-	if err := p.injectSearchPath(sess); err != nil {
-		fmt.Printf("Error injecting initial search_path: %v\n", err)
-		return
-	}
-
 	// Main loop: intercept AUTODB commands, relay everything else
 	p.mainLoop(ctx, clientConn, backendConn, sess)
-}
-
-// searchPathForMode returns the SET search_path SQL for the given mode.
-func (p *Proxy) searchPathForMode(mode string) string {
-	if mode == "synthetic" {
-		return fmt.Sprintf("SET search_path TO public_%s, public", p.key)
-	}
-	return "SET search_path TO public"
-}
-
-// injectSearchPath sends a SET search_path command to the backend.
-// The response (CommandComplete + ReadyForQuery) is consumed and NOT forwarded to the client.
-func (p *Proxy) injectSearchPath(sess *session) error {
-	mode := sess.mode
-	if mode == "" {
-		mode = p.state.GlobalMode
-	}
-
-	newPath := p.searchPathForMode(mode)
-	if newPath == sess.currentPath {
-		return nil
-	}
-
-	// Build PG wire protocol Query message: 'Q' + int32(len) + query\0
-	query := newPath
-	queryBytes := append([]byte(query), 0)
-	msgLen := uint32(4 + len(queryBytes))
-
-	buf := make([]byte, 1+4+len(queryBytes))
-	buf[0] = 'Q'
-	binary.BigEndian.PutUint32(buf[1:5], msgLen)
-	copy(buf[5:], queryBytes)
-
-	if _, err := sess.backendConn.Write(buf); err != nil {
-		return fmt.Errorf("sending search_path: %w", err)
-	}
-
-	// Consume the response (CommandComplete + ReadyForQuery)
-	if err := p.consumeUntilReady(sess.backendConn); err != nil {
-		return fmt.Errorf("consuming search_path response: %w", err)
-	}
-
-	sess.currentPath = newPath
-	return nil
-}
-
-// consumeUntilReady reads and discards backend messages until ReadyForQuery.
-func (p *Proxy) consumeUntilReady(backendConn net.Conn) error {
-	frontend := pgproto3.NewFrontend(backendConn, backendConn)
-	for {
-		msg, err := frontend.Receive()
-		if err != nil {
-			return err
-		}
-		if _, ok := msg.(*pgproto3.ReadyForQuery); ok {
-			return nil
-		}
-	}
 }
 
 func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, sess *session) {
@@ -306,11 +234,13 @@ func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, 
 			}
 			return
 		}
-		clientConn.Write(buf[:n])
+		if _, err := clientConn.Write(buf[:n]); err != nil {
+			return
+		}
 	}
 }
 
-// pauseRelay pauses the backend→client relay goroutine.
+// pauseRelay pauses the backend->client relay goroutine.
 // It sets a read deadline to interrupt any blocked Read, then waits until
 // the relay goroutine confirms it has paused.
 func (sess *session) pauseRelay() {
@@ -330,7 +260,7 @@ func (sess *session) pauseRelay() {
 	sess.backendConn.SetReadDeadline(time.Time{})
 }
 
-// resumeRelay resumes the backend→client relay goroutine after a pause.
+// resumeRelay resumes the backend->client relay goroutine after a pause.
 func (sess *session) resumeRelay() {
 	sess.backendConn.SetReadDeadline(time.Time{}) // clear deadline
 	sess.mu.Lock()
@@ -368,14 +298,6 @@ func (p *Proxy) handleAutoDBCommand(ctx context.Context, clientConn net.Conn, se
 	if err != nil {
 		p.sendError(clientConn, err.Error())
 		return
-	}
-
-	// If this was a mode change, re-inject the search_path (safe — relay is paused).
-	if cmd.Mode != nil {
-		if err := p.injectSearchPath(sess); err != nil {
-			p.sendError(clientConn, fmt.Sprintf("failed to update search_path: %v", err))
-			return
-		}
 	}
 
 	p.sendResult(clientConn, result)

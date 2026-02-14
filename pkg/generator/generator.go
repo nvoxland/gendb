@@ -3,7 +3,6 @@ package generator
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -203,7 +202,7 @@ func (g *Generator) generateTable(ctx context.Context, table *schema.Table, plan
 			// Handle FK columns
 			if fkTable := fkTarget(table, col.Name); fkTable != "" {
 				if refs, ok := pkValues[fkTable]; ok && len(refs) > 0 {
-					refRow := refs[rand.Intn(len(refs))]
+					refRow := refs[g.faker.IntN(len(refs))]
 					refCol := fkRefCol(table, col.Name)
 					row[col.Name] = refRow[refCol]
 					continue
@@ -310,7 +309,7 @@ func (g *Generator) generateValue(ctx context.Context, col *schema.Column, plan 
 				days = n
 			}
 		}
-		return time.Now().Add(-time.Duration(rand.Intn(days*24)) * time.Hour), nil
+		return time.Now().Add(-time.Duration(g.faker.IntN(days*24)) * time.Hour), nil
 	case "time.past":
 		return g.faker.DateRange(time.Now().AddDate(-5, 0, 0), time.Now()), nil
 	case "time.future":
@@ -343,7 +342,7 @@ func (g *Generator) generateValue(ctx context.Context, col *schema.Column, plan 
 		if len(plan.Values) == 0 {
 			return nil, fmt.Errorf("one_of generator requires values")
 		}
-		return plan.Values[rand.Intn(len(plan.Values))], nil
+		return plan.Values[g.faker.IntN(len(plan.Values))], nil
 	case "regex":
 		if plan.Format == "" {
 			return nil, fmt.Errorf("regex generator requires format")

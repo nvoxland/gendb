@@ -5,22 +5,28 @@
 ## Key Features
 
 - **LLM-driven generation** — An LLM analyzes your schema (column names, types, constraints) and picks the best data generator for each column
-- **Wire protocol proxy** — A PostgreSQL proxy intercepts connections and routes queries to your real or shadow database
-- **AUTODB SQL** — Control commands using standard `CALL autodb.*()` syntax, sent through any PostgreSQL connection (`psql`, any driver) to switch modes, regenerate data, and configure generators on the fly
+- **Wire protocol proxy** — A PostgreSQL proxy intercepts connections and uses temporary views to route queries to real or generated data per table
+- **AUTODB SQL** — Control commands using standard `CALL autodb.*()` syntax, sent through any PostgreSQL connection (`psql`, any driver) to generate data and toggle between real and generated data
 - **Full CRUD against synthetic data** — The shadow schema contains real PostgreSQL tables; reads and writes work normally
 - **Reproducible** — Set a seed for deterministic data generation across runs
-- **Zero application changes** — Point your app at the proxy and switch between real and synthetic data with a single command
+- **Zero application changes** — Point your app at the proxy and switch between real and synthetic data per table
 
 ## Quick Start
 
 ```bash
-# Initialize from your real database
-autodb init --url postgres://user:pass@localhost:5432/mydb
-
-# Create the shadow schema, clone tables, generate data
-autodb up
+# Start the proxy
+autodb serve --db-database mydb --port 5433
 ```
 
-Then query shadow data directly (`SELECT * FROM autodb_shadow.<table>`), or start the proxy and switch modes on the fly.
+Then connect through the proxy, generate data, and toggle routing per table:
+
+```sql
+CALL autodb.generate_data(table_name => 'users', rows => 500);
+CALL autodb.return_generated(table_name => 'users');
+-- queries against "users" now return generated data
+
+CALL autodb.return_actual(table_name => 'users');
+-- queries against "users" return real data again
+```
 
 [Get started →](getting-started.md)

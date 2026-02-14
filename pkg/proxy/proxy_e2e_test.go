@@ -252,13 +252,12 @@ func TestProxyE2E(t *testing.T) {
 	}
 
 	// Start the proxy
-	state := lang.NewState()
-	executor := lang.NewExecutor(state)
+	executor := lang.NewExecutor()
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
 		Key:        "autodb",
-	}, state, executor)
+	}, executor)
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	defer proxyCancel()
@@ -351,8 +350,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 
 	const testKey = "autodb"
 
-	state := lang.NewState()
-	executor := lang.NewExecutor(state)
+	executor := lang.NewExecutor()
 
 	// Wire up OnGenerate the same way serve.go does.
 	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64) error {
@@ -408,7 +406,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
 		Key:        testKey,
-	}, state, executor)
+	}, executor)
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	defer proxyCancel()

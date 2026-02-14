@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/nvoxland/autodb/pkg/config"
 	"github.com/nvoxland/autodb/pkg/schema"
@@ -153,24 +154,7 @@ func (c *Client) GenerateText(ctx context.Context, prompt string, vars map[strin
 }
 
 func replaceVar(s, key, value string) string {
-	old := "{" + key + "}"
-	result := s
-	for {
-		idx := indexOf(result, old)
-		if idx == -1 {
-			return result
-		}
-		result = result[:idx] + value + result[idx+len(old):]
-	}
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
+	return strings.ReplaceAll(s, "{"+key+"}", value)
 }
 
 func parseGenerationPlan(content string) (*GenerationPlan, error) {

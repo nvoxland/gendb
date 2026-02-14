@@ -10,44 +10,29 @@ This page describes AutoDB's architecture and internal mechanics.
 │  Application ├────►│                           ├────►│                      │
 │  (psql, app) │     │  ┌────────────────────┐   │     │  ├── public.users    │
 │              │◄────┤  │ AUTODB SQL Engine   │   │◄────┤  ├── public.orders   │
-└──────────────┘     │  │ - Parse DSL         │   │     │  ├── autodb_shadow   │
-                     │  │ - Mode switching    │   │     │  │   ├── .users      │
-                     │  │ - search_path ctrl  │   │     │  │   └── .orders     │
+└──────────────┘     │  │ - Parse DSL         │   │     │  ├── public_autodb   │
+                     │  │ - Generate data     │   │     │  │   ├── .users      │
+                     │  │ - Temp view routing  │   │     │  │   └── .orders     │
                      │  └────────────────────┘   │     └──────────────────────┘
-                     │                           │
-                     │  SYNTHETIC: search_path   │
-                     │    → autodb_shadow, public │
-                     │  REAL: search_path        │
-                     │    → public               │
                      └──────────────────────────┘
 ```
 
 ## Schema-Based Shadow
 
-The shadow database is a PostgreSQL schema (`autodb_shadow` by default) created inside your real database:
+The shadow database is a PostgreSQL schema (`public_autodb` by default) created inside your real database:
 
 - **No external dependencies** — no Docker, no separate database instance
 - **Same database** — the shadow schema coexists with your real `public` schema
-- **Schema cloning** — your real table structure is reconstructed as `autodb_shadow.<table>` with synthetic data
-- **Search path routing** — the proxy uses `SET search_path` to control which schema queries resolve against
+- **Schema cloning** — your real table structure is reconstructed as `public_autodb.<table>` with synthetic data
 
-### How Search Path Works
+### How Routing Works
 
-When the proxy switches to `SYNTHETIC` mode, it sends:
-```sql
-SET search_path TO autodb_shadow, public
-```
+AutoDB uses temporary views to route queries per table:
 
-Unqualified queries like `SELECT * FROM users` now resolve to `autodb_shadow.users`. If a table doesn't exist in `autodb_shadow`, it falls through to `public` — this enables per-table routing naturally.
+- **`return_generated`** creates a temporary view with the same name as the real table, pointing at the shadow schema table. Since temporary views take priority over base tables in PostgreSQL's resolution, subsequent queries against that table name return generated data.
+- **`return_actual`** drops the temporary view, restoring normal resolution to the real table.
 
-When switching back to `REAL` mode:
-```sql
-SET search_path TO public
-```
-
-### Per-Table Routing
-
-For per-table mode (`CALL autodb.mode(mode => 'synthetic', tables => 'users')`), only the specified tables exist in the shadow schema. Other tables fall through to `public` via the search path.
+This approach provides per-table routing with no impact on other sessions or tables.
 
 ## Schema Introspection
 
@@ -57,7 +42,7 @@ AutoDB introspects your real database to understand its structure:
 
 2. **DDL reconstruction** — AutoDB reconstructs schema-qualified `CREATE TABLE` statements from the introspected metadata, targeting the shadow schema.
 
-3. **Schema exclusion** — During introspection, the `autodb_shadow` schema is excluded so shadow tables don't appear as "real" tables.
+3. **Schema exclusion** — During introspection, the shadow schema is excluded so shadow tables don't appear as "real" tables.
 
 ## Two-Phase Generation
 
@@ -105,18 +90,17 @@ This ensures referential integrity without disabling FK constraints.
 
 ## Bulk Insert via COPY
 
-Generated data is inserted using PostgreSQL's `COPY` protocol (`pgx.CopyFrom`), which is significantly faster than individual INSERT statements. A single COPY call inserts all rows for a table. Inserts target schema-qualified table names (e.g., `autodb_shadow.users`).
+Generated data is inserted using PostgreSQL's `COPY` protocol (`pgx.CopyFrom`), which is significantly faster than individual INSERT statements. A single COPY call inserts all rows for a table. Inserts target schema-qualified table names (e.g., `public_autodb.users`).
 
 ## Proxy: Byte-Level Relay
 
 The proxy operates at the PostgreSQL wire protocol level:
 
 1. Accepts TCP connections on the configured port
-2. Connects to the real database and injects `SET search_path` based on the current mode
+2. Connects to the real database
 3. For each incoming message, checks if it starts with `CALL autodb.` (case-insensitive)
 4. **AUTODB commands** are parsed and executed internally
 5. **Standard SQL** is forwarded as raw bytes to the real database
 6. Responses from the database are relayed back to the client as-is
-7. On mode changes, a new `SET search_path` is injected transparently
 
 This design means the proxy adds minimal latency and has zero SQL compatibility issues — it never parses your queries.

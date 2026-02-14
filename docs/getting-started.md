@@ -39,19 +39,19 @@ autodb serve --db-database mydb --port 5433
 psql -h localhost -p 5433 -U user mydb
 ```
 
-### 3. Switch modes
+### 3. Generate data and toggle routing
 
 From any connection through the proxy, send AUTODB SQL commands:
 
 ```sql
--- Switch to synthetic data (all queries use autodb_shadow schema)
-CALL autodb.mode(mode => 'synthetic');
+-- Generate synthetic data for a table
+CALL autodb.generate_data(table_name => 'users', rows => 500);
+
+-- Route queries for "users" to the generated data
+CALL autodb.return_generated(table_name => 'users');
 
 -- Switch back to real data
-CALL autodb.mode(mode => 'real');
-
--- Switch only specific tables
-CALL autodb.mode(mode => 'synthetic', tables => 'users,orders');
+CALL autodb.return_actual(table_name => 'users');
 ```
 
 ## Next Steps

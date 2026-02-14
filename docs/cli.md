@@ -180,7 +180,7 @@ Shadow DB:     active (schema autodb_shadow exists)
 
 Start the PostgreSQL wire protocol proxy.
 
-Listens for PostgreSQL connections and routes them to the real database. Uses `SET search_path` to switch between real and synthetic data based on the current mode. AUTODB SQL commands are intercepted and executed by the proxy.
+Listens for PostgreSQL connections and routes them to the real database. AUTODB SQL commands are intercepted and executed by the proxy.
 
 ```bash
 autodb proxy [--port N]

@@ -1,31 +1,9 @@
 package config
 
-import (
-	"fmt"
-	"os"
-
-	"gopkg.in/yaml.v3"
-)
-
-const DefaultConfigFile = "autodb.yaml"
-
+// Config holds the AutoDB configuration.
 type Config struct {
-	Connection ConnectionConfig `yaml:"connection"`
 	LLM        LLMConfig        `yaml:"llm"`
 	Generation GenerationConfig `yaml:"generation"`
-}
-
-type ConnectionConfig struct {
-	Real   RealDBConfig   `yaml:"real"`
-	Shadow ShadowDBConfig `yaml:"shadow"`
-}
-
-type RealDBConfig struct {
-	URL string `yaml:"url"`
-}
-
-type ShadowDBConfig struct {
-	Key string `yaml:"key"` // key for shadow schema naming: {source_schema}_{key} (default: autodb)
 }
 
 type LLMConfig struct {
@@ -64,11 +42,6 @@ type ColumnRule struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Connection: ConnectionConfig{
-			Shadow: ShadowDBConfig{
-				Key: "autodb",
-			},
-		},
 		LLM: LLMConfig{
 			Provider: "ollama",
 			Model:    "llama3.2",
@@ -79,31 +52,4 @@ func DefaultConfig() *Config {
 			Seed:        42,
 		},
 	}
-}
-
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
-	}
-
-	cfg := DefaultConfig()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
-	}
-
-	return cfg, nil
-}
-
-func (c *Config) Save(path string) error {
-	data, err := yaml.Marshal(c)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("writing config file: %w", err)
-	}
-
-	return nil
 }

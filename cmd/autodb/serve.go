@@ -41,8 +41,7 @@ func init() {
 func runServe(cmd *cobra.Command, args []string) error {
 	realAddr := fmt.Sprintf("%s:%d", dbHostname, dbPort)
 
-	state := lang.NewState()
-	executor := lang.NewExecutor(state)
+	executor := lang.NewExecutor()
 
 	// Wire up OnGenerate callback
 	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64) error {
@@ -133,7 +132,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		ListenAddr: fmt.Sprintf(":%d", servePort),
 		RealAddr:   realAddr,
 		Key:        key,
-	}, state, executor)
+	}, executor)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -13,23 +13,10 @@ type Inspector struct {
 	conn *pgx.Conn
 }
 
-// NewInspector creates an inspector connected to the given database.
-func NewInspector(ctx context.Context, connString string) (*Inspector, error) {
-	conn, err := pgx.Connect(ctx, connString)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to database: %w", err)
-	}
-	return &Inspector{conn: conn}, nil
-}
-
 // NewInspectorFromConn creates an inspector from an existing connection.
+// The caller is responsible for managing the connection's lifecycle.
 func NewInspectorFromConn(conn *pgx.Conn) *Inspector {
 	return &Inspector{conn: conn}
-}
-
-// Close closes the database connection.
-func (i *Inspector) Close(ctx context.Context) error {
-	return i.conn.Close(ctx)
 }
 
 // InspectOptions controls schema introspection behavior.

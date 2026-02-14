@@ -1,102 +1,9 @@
 package schema
 
 import (
-	"context"
 	"fmt"
-	"net/url"
-	"os/exec"
 	"strings"
 )
-
-// DumpSchema runs pg_dump --schema-only and returns the DDL.
-// Falls back to DDL reconstruction if pg_dump is not available.
-func DumpSchema(ctx context.Context, connString string) (string, error) {
-	ddl, err := pgDumpSchema(ctx, connString)
-	if err != nil {
-		return "", err
-	}
-	return ddl, nil
-}
-
-func pgDumpSchema(ctx context.Context, connString string) (string, error) {
-	// Check if pg_dump is available
-	if _, err := exec.LookPath("pg_dump"); err != nil {
-		return "", fmt.Errorf("pg_dump not found: %w", err)
-	}
-
-	cmd := exec.CommandContext(ctx, "pg_dump", "--schema-only", "--no-owner", "--no-privileges", connString)
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("pg_dump failed: %s", string(exitErr.Stderr))
-		}
-		return "", fmt.Errorf("running pg_dump: %w", err)
-	}
-	return string(out), nil
-}
-
-// ReconstructDDL builds CREATE TABLE statements from the SchemaGraph.
-// Used as a fallback when pg_dump is not available.
-func ReconstructDDL(sg *SchemaGraph) string {
-	var b strings.Builder
-
-	for _, t := range sg.Tables {
-		fmt.Fprintf(&b, "CREATE TABLE %s (\n", quoteIdent(t.Name))
-
-		for i, c := range t.Columns {
-			fmt.Fprintf(&b, "    %s %s", quoteIdent(c.Name), c.DataType)
-			if !c.IsNullable {
-				b.WriteString(" NOT NULL")
-			}
-			if c.DefaultValue != "" {
-				fmt.Fprintf(&b, " DEFAULT %s", c.DefaultValue)
-			}
-			if i < len(t.Columns)-1 || len(t.PrimaryKey) > 0 || len(t.ForeignKeys) > 0 || len(t.Checks) > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString("\n")
-		}
-
-		if len(t.PrimaryKey) > 0 {
-			quoted := make([]string, len(t.PrimaryKey))
-			for i, pk := range t.PrimaryKey {
-				quoted[i] = quoteIdent(pk)
-			}
-			fmt.Fprintf(&b, "    PRIMARY KEY (%s)", strings.Join(quoted, ", "))
-			if len(t.ForeignKeys) > 0 || len(t.Checks) > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString("\n")
-		}
-
-		for i, fk := range t.ForeignKeys {
-			cols := make([]string, len(fk.Columns))
-			refCols := make([]string, len(fk.ReferencedCols))
-			for j := range fk.Columns {
-				cols[j] = quoteIdent(fk.Columns[j])
-				refCols[j] = quoteIdent(fk.ReferencedCols[j])
-			}
-			fmt.Fprintf(&b, "    FOREIGN KEY (%s) REFERENCES %s (%s)",
-				strings.Join(cols, ", "), quoteIdent(fk.ReferencedTable), strings.Join(refCols, ", "))
-			if i < len(t.ForeignKeys)-1 || len(t.Checks) > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString("\n")
-		}
-
-		for i, ck := range t.Checks {
-			fmt.Fprintf(&b, "    CONSTRAINT %s CHECK (%s)", quoteIdent(ck.Name), ck.Expression)
-			if i < len(t.Checks)-1 {
-				b.WriteString(",")
-			}
-			b.WriteString("\n")
-		}
-
-		b.WriteString(");\n\n")
-	}
-
-	return b.String()
-}
 
 // ReconstructDDLForSchema builds schema-qualified CREATE TABLE statements.
 // Tables, foreign key references, and indexes are qualified with targetSchema.
@@ -216,13 +123,4 @@ func needsQuoting(s string) bool {
 		}
 	}
 	return false
-}
-
-// ParseConnString extracts the database name from a connection string.
-func ParseConnString(connString string) (dbName string, err error) {
-	u, err := url.Parse(connString)
-	if err != nil {
-		return "", fmt.Errorf("parsing connection string: %w", err)
-	}
-	return strings.TrimPrefix(u.Path, "/"), nil
 }

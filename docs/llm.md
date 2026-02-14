@@ -35,12 +35,6 @@ Ollama is the default provider and runs entirely on your machine.
       base_url: http://localhost:11434/v1
     ```
 
-Or via AUTODB SQL:
-
-```sql
-CALL autodb.set_model(name => 'local');
-```
-
 ## OpenAI
 
 ### Setup
@@ -56,14 +50,8 @@ CALL autodb.set_model(name => 'local');
       api_key: sk-...
     ```
 
-Or via AUTODB SQL:
-
-```sql
-CALL autodb.set_model(name => 'gpt-4o-mini', key => 'sk-...');
-```
-
 !!! tip
-    `gpt-4o-mini` is recommended for a good balance of quality and cost. Schema analysis is a single API call per `generate`/`reset`, so costs are minimal.
+    `gpt-4o-mini` is recommended for a good balance of quality and cost. Schema analysis is a single API call per `generate_data`, so costs are minimal.
 
 ## Custom / Self-Hosted
 
@@ -103,7 +91,7 @@ The prompt can reference other columns in the same row using `{column_name}` pla
 
 | Operation | LLM calls | Typical cost (OpenAI) |
 |-----------|-----------|----------------------|
-| Schema analysis | 1 per `generate`/`reset` | ~$0.01 |
+| Schema analysis | 1 per `generate_data` | ~$0.01 |
 | Data generation (default) | 0 | Free |
 | `generator: llm` columns | 1 per row per column | Varies |
 
