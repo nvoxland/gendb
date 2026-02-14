@@ -48,6 +48,9 @@ type Executor struct {
 	// Schema info callback for SHOW commands
 	OnShowTables func(ctx context.Context) ([][]string, error) // returns rows of [name, row_count, mode]
 	OnShowTable  func(ctx context.Context, table string) ([][]string, error)
+	// Session-level view management
+	OnReturnGenerated func(ctx context.Context, table string) error
+	OnReturnActual    func(ctx context.Context, table string) error
 }
 
 // NewExecutor creates a new command executor.
@@ -70,6 +73,10 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command) (*Result, error) {
 		return e.execShow(ctx, cmd.Show)
 	case cmd.Sync != nil:
 		return e.execSync(ctx, cmd.Sync)
+	case cmd.ReturnGenerated != nil:
+		return e.execReturnGenerated(ctx, cmd.ReturnGenerated)
+	case cmd.ReturnActual != nil:
+		return e.execReturnActual(ctx, cmd.ReturnActual)
 	default:
 		return nil, fmt.Errorf("unrecognized AUTODB command")
 	}
@@ -94,23 +101,18 @@ func (e *Executor) execGenerate(ctx context.Context, cmd *GenerateCommand) (*Res
 		return nil, fmt.Errorf("generate not configured")
 	}
 
-	table := cmd.Table
-	if cmd.All {
-		table = ""
-	}
-
-	if err := e.OnGenerate(ctx, table, cmd.Rows, cmd.Seed); err != nil {
+	if err := e.OnGenerate(ctx, cmd.Table, cmd.Rows, cmd.Seed); err != nil {
 		return nil, err
 	}
 
-	if cmd.All {
-		return &Result{Tag: fmt.Sprintf("AUTODB GENERATE ALL ROWS %d", cmd.Rows)}, nil
+	if cmd.Table == "" {
+		return &Result{Tag: fmt.Sprintf("AUTODB GENERATE DATA ROWS %d", cmd.Rows)}, nil
 	}
-	return &Result{Tag: fmt.Sprintf("AUTODB GENERATE TABLE %s ROWS %d", cmd.Table, cmd.Rows)}, nil
+	return &Result{Tag: fmt.Sprintf("AUTODB GENERATE DATA FOR %s ROWS %d", cmd.Table, cmd.Rows)}, nil
 }
 
 func (e *Executor) execReset(ctx context.Context, cmd *ResetCommand) (*Result, error) {
-	if cmd.All {
+	if cmd.Table == "" {
 		if e.OnResetAll != nil {
 			if err := e.OnResetAll(ctx); err != nil {
 				return nil, err
@@ -129,14 +131,6 @@ func (e *Executor) execReset(ctx context.Context, cmd *ResetCommand) (*Result, e
 func (e *Executor) execSet(ctx context.Context, cmd *SetCommand) (*Result, error) {
 	switch {
 	case cmd.Model != nil:
-		if cmd.Model.Local {
-			if e.OnSetModel != nil {
-				if err := e.OnSetModel(ctx, "local", ""); err != nil {
-					return nil, err
-				}
-			}
-			return &Result{Tag: "AUTODB SET MODEL LOCAL"}, nil
-		}
 		if e.OnSetModel != nil {
 			if err := e.OnSetModel(ctx, cmd.Model.Name, cmd.Model.Key); err != nil {
 				return nil, err
@@ -211,4 +205,24 @@ func (e *Executor) execSync(ctx context.Context, cmd *SyncCommand) (*Result, err
 		}
 	}
 	return &Result{Tag: "AUTODB SYNC SCHEMA"}, nil
+}
+
+func (e *Executor) execReturnGenerated(ctx context.Context, cmd *ReturnGeneratedCommand) (*Result, error) {
+	if e.OnReturnGenerated == nil {
+		return nil, fmt.Errorf("return_generated not configured")
+	}
+	if err := e.OnReturnGenerated(ctx, cmd.Table); err != nil {
+		return nil, err
+	}
+	return &Result{Tag: fmt.Sprintf("AUTODB RETURN GENERATED %s", cmd.Table)}, nil
+}
+
+func (e *Executor) execReturnActual(ctx context.Context, cmd *ReturnActualCommand) (*Result, error) {
+	if e.OnReturnActual == nil {
+		return nil, fmt.Errorf("return_actual not configured")
+	}
+	if err := e.OnReturnActual(ctx, cmd.Table); err != nil {
+		return nil, err
+	}
+	return &Result{Tag: fmt.Sprintf("AUTODB RETURN ACTUAL %s", cmd.Table)}, nil
 }

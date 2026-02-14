@@ -8,6 +8,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// DeriveSchemaName returns the shadow schema name for a given source schema and key.
+// For example, DeriveSchemaName("public", "autodb") returns "public_autodb".
+func DeriveSchemaName(sourceSchema, key string) string {
+	return sourceSchema + "_" + key
+}
+
 // SchemaManager manages the shadow schema within the real database.
 type SchemaManager struct {
 	realURL    string
@@ -17,7 +23,7 @@ type SchemaManager struct {
 // NewSchemaManager creates a new schema-based shadow manager.
 func NewSchemaManager(realURL string, schemaName string) *SchemaManager {
 	if schemaName == "" {
-		schemaName = "autodb_shadow"
+		schemaName = DeriveSchemaName("public", "autodb")
 	}
 	return &SchemaManager{
 		realURL:    realURL,

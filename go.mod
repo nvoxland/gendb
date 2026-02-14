@@ -3,7 +3,6 @@ module github.com/nvoxland/autodb
 go 1.25.7
 
 require (
-	github.com/alecthomas/participle/v2 v2.1.4
 	github.com/brianvoe/gofakeit/v7 v7.14.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/openai/openai-go v1.12.0

@@ -2,7 +2,7 @@ connection:
   real:
     url: postgres://user:pass@localhost:5432/mydb
   shadow:
-    schema: autodb_shadow   # schema name for synthetic data
+    key: autodb             # shadow schema naming key: {source_schema}_{key}
 
 llm:
   provider: ollama        # ollama | openai | custom

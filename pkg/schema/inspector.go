@@ -22,6 +22,11 @@ func NewInspector(ctx context.Context, connString string) (*Inspector, error) {
 	return &Inspector{conn: conn}, nil
 }
 
+// NewInspectorFromConn creates an inspector from an existing connection.
+func NewInspectorFromConn(conn *pgx.Conn) *Inspector {
+	return &Inspector{conn: conn}
+}
+
 // Close closes the database connection.
 func (i *Inspector) Close(ctx context.Context) error {
 	return i.conn.Close(ctx)
@@ -35,6 +40,53 @@ type InspectOptions struct {
 // Inspect reads the full schema and returns a topologically sorted SchemaGraph.
 func (i *Inspector) Inspect(ctx context.Context) (*SchemaGraph, error) {
 	return i.InspectWithOptions(ctx, InspectOptions{})
+}
+
+// InspectTable reads the schema for a single named table (excluding system schemas).
+func (i *Inspector) InspectTable(ctx context.Context, tableName string) (*SchemaGraph, error) {
+	rows, err := i.conn.Query(ctx, `
+		SELECT table_schema, table_name
+		FROM information_schema.tables
+		WHERE table_name = $1
+		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+		  AND table_type = 'BASE TABLE'
+		ORDER BY table_schema
+		LIMIT 1
+	`, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("querying table %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	var table *Table
+	for rows.Next() {
+		table = &Table{}
+		if err := rows.Scan(&table.Schema, &table.Name); err != nil {
+			return nil, fmt.Errorf("scanning table %s: %w", tableName, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if table == nil {
+		return nil, fmt.Errorf("table %s not found", tableName)
+	}
+
+	if err := i.getColumns(ctx, table); err != nil {
+		return nil, err
+	}
+	if err := i.getForeignKeys(ctx, table); err != nil {
+		return nil, err
+	}
+	if err := i.getChecks(ctx, table); err != nil {
+		return nil, err
+	}
+	if err := i.getIndexes(ctx, table); err != nil {
+		return nil, err
+	}
+
+	tableIndex := map[string]*Table{table.Name: table}
+	return &SchemaGraph{Tables: []*Table{table}, tableIndex: tableIndex}, nil
 }
 
 // InspectWithOptions reads the schema with filtering options.

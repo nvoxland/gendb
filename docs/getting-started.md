@@ -45,13 +45,13 @@ From any connection through the proxy, send AUTODB SQL commands:
 
 ```sql
 -- Switch to synthetic data (all queries use autodb_shadow schema)
-AUTODB MODE SYNTHETIC;
+CALL autodb.mode(mode => 'synthetic');
 
 -- Switch back to real data
-AUTODB MODE REAL;
+CALL autodb.mode(mode => 'real');
 
 -- Switch only specific tables
-AUTODB MODE SYNTHETIC FOR TABLE users, orders;
+CALL autodb.mode(mode => 'synthetic', tables => 'users,orders');
 ```
 
 ## Next Steps

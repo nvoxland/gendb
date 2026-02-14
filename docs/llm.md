@@ -38,7 +38,7 @@ Ollama is the default provider and runs entirely on your machine.
 Or via AUTODB SQL:
 
 ```sql
-AUTODB SET MODEL LOCAL;
+CALL autodb.set_model(name => 'local');
 ```
 
 ## OpenAI
@@ -59,7 +59,7 @@ AUTODB SET MODEL LOCAL;
 Or via AUTODB SQL:
 
 ```sql
-AUTODB SET MODEL 'gpt-4o-mini' KEY 'sk-...';
+CALL autodb.set_model(name => 'gpt-4o-mini', key => 'sk-...');
 ```
 
 !!! tip

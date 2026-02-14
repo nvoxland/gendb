@@ -2,103 +2,112 @@ package lang
 
 // Command is the top-level AST node for all AUTODB commands.
 type Command struct {
-	Mode       *ModeCommand     `  "AUTODB" "MODE" @@`
-	Generate   *GenerateCommand `| "AUTODB" ( "GENERATE" | "REGENERATE" ) @@`
-	Reset      *ResetCommand    `| "AUTODB" "RESET" @@`
-	Set        *SetCommand      `| "AUTODB" "SET" @@`
-	Show       *ShowCommand     `| "AUTODB" "SHOW" @@`
-	Sync       *SyncCommand     `| "AUTODB" "SYNC" @@`
-	CreateProf *CreateProfile   `| "AUTODB" "CREATE" "PROFILE" @@`
-	UseProf    *UseProfile      `| "AUTODB" "USE" "PROFILE" @@`
-	DropProf   *DropProfile     `| "AUTODB" "DROP" "PROFILE" @@`
+	Mode            *ModeCommand
+	Generate        *GenerateCommand
+	Reset           *ResetCommand
+	Set             *SetCommand
+	Show            *ShowCommand
+	Sync            *SyncCommand
+	CreateProf      *CreateProfile
+	UseProf         *UseProfile
+	DropProf        *DropProfile
+	ReturnGenerated *ReturnGeneratedCommand
+	ReturnActual    *ReturnActualCommand
 }
 
-// ModeCommand: AUTODB MODE SYNTHETIC|REAL [FOR TABLE t1, t2, ...]
+// ModeCommand: CALL autodb.mode(mode => 'synthetic', tables => 'users,orders')
 type ModeCommand struct {
-	Mode   string   `@( "SYNTHETIC" | "REAL" )`
-	Tables []string `( "FOR" "TABLE" @Ident ( "," @Ident )* )?`
+	Mode   string
+	Tables []string
 }
 
-// GenerateCommand: AUTODB GENERATE TABLE t ROWS n [SEED n] | AUTODB GENERATE ALL ROWS n
+// GenerateCommand: CALL autodb.generate_data(table_name => 'users', rows => 500, seed => 42)
 type GenerateCommand struct {
-	All   bool   `(   @"ALL"`
-	Table string `  | "TABLE" @Ident )`
-	Rows  int    `( "ROWS" @Int )?`
-	Seed  *int64 `( "SEED" @Int )?`
+	Table string
+	Rows  int
+	Seed  *int64
 }
 
-// ResetCommand: AUTODB RESET TABLE t | AUTODB RESET ALL
+// ResetCommand: CALL autodb.reset(table_name => 'users') or CALL autodb.reset()
 type ResetCommand struct {
-	All   bool   `(   @"ALL"`
-	Table string `  | "TABLE" @Ident )`
+	Table string
 }
 
 // SetCommand covers various SET subcommands.
 type SetCommand struct {
-	Model       *SetModel       `(   "MODEL" @@`
-	Seed        *int64          `  | "SEED" @Int`
-	DefaultRows *int            `  | "DEFAULT_ROWS" @Int`
-	TableCol    *SetTableColumn `  | "TABLE" @@ )`
+	Model       *SetModel
+	Seed        *int64
+	DefaultRows *int
+	TableCol    *SetTableColumn
 }
 
-// SetModel: AUTODB SET MODEL 'name' [KEY 'key'] | AUTODB SET MODEL LOCAL
+// SetModel: CALL autodb.set_model(name => 'gpt-4o', key => 'sk-x')
 type SetModel struct {
-	Local bool   `(   @"LOCAL"`
-	Name  string `  | @String )`
-	Key   string `( "KEY" @String )?`
+	Name string
+	Key  string
 }
 
-// SetTableColumn: AUTODB SET TABLE t COLUMN c GENERATOR 'g' [PROMPT 'p'] [VALUES (...)]
+// SetTableColumn: CALL autodb.set_column(table_name => 't', column_name => 'c', generator => 'g', prompt => 'p', values => 'a,b')
 type SetTableColumn struct {
-	Table     string   `@Ident "COLUMN" `
-	Column    string   `@Ident`
-	Generator string   `"GENERATOR" @String`
-	Prompt    string   `( "PROMPT" @String )?`
-	Values    []string `( "VALUES" "(" @String ( "," @String )* ")" )?`
+	Table     string
+	Column    string
+	Generator string
+	Prompt    string
+	Values    []string
 }
 
-// ShowCommand: AUTODB SHOW STATUS|TABLES|CONFIG|PROFILES|...
+// ShowCommand: CALL autodb.show_status(), show_tables(), etc.
 type ShowCommand struct {
-	Status    bool       `(   @"STATUS"`
-	Tables    bool       `  | @"TABLES"`
-	Config    bool       `  | @"CONFIG"`
-	Profiles  bool       `  | @"PROFILES"`
-	GenPlan   *ShowPlan  `  | "GENERATION" "PLAN" @@`
-	TableInfo *ShowTable `  | "TABLE" @@ )`
+	Status    bool
+	Tables    bool
+	Config    bool
+	Profiles  bool
+	GenPlan   *ShowPlan
+	TableInfo *ShowTable
 }
 
-// ShowPlan: [FOR TABLE t]
+// ShowPlan: CALL autodb.show_generation_plan(table_name => 'users')
 type ShowPlan struct {
-	Table string `( "FOR" "TABLE" @Ident )?`
+	Table string
 }
 
-// ShowTable: AUTODB SHOW TABLE t
+// ShowTable: CALL autodb.show_table(table_name => 'users')
 type ShowTable struct {
-	Table string `@Ident`
+	Table string
 }
 
-// SyncCommand: AUTODB SYNC SCHEMA
+// SyncCommand: CALL autodb.sync_schema()
 type SyncCommand struct {
-	Schema bool `@"SCHEMA"`
+	Schema bool
 }
 
-// CreateProfile: AUTODB CREATE PROFILE 'name' (TABLE t ROWS n, ...)
+// CreateProfile: CALL autodb.create_profile(name => 'load-test', tables => 'users:100000,orders:500000')
 type CreateProfile struct {
-	Name   string         `@String "("`
-	Tables []ProfileTable `@@ ( "," @@ )* ")"`
+	Name   string
+	Tables []ProfileTable
 }
 
 type ProfileTable struct {
-	Table string `"TABLE" @Ident`
-	Rows  int    `"ROWS" @Int`
+	Table string
+	Rows  int
 }
 
-// UseProfile: AUTODB USE PROFILE 'name'
+// UseProfile: CALL autodb.use_profile(name => 'load-test')
 type UseProfile struct {
-	Name string `@String`
+	Name string
 }
 
-// DropProfile: AUTODB DROP PROFILE 'name'
+// DropProfile: CALL autodb.drop_profile(name => 'load-test')
 type DropProfile struct {
-	Name string `@String`
+	Name string
+}
+
+// ReturnGeneratedCommand: CALL autodb.return_generated(table_name => 'users')
+type ReturnGeneratedCommand struct {
+	Table string
+}
+
+// ReturnActualCommand: CALL autodb.return_actual(table_name => 'users')
+type ReturnActualCommand struct {
+	Table string
 }

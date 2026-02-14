@@ -47,7 +47,7 @@ SET search_path TO public
 
 ### Per-Table Routing
 
-For per-table mode (`AUTODB MODE SYNTHETIC FOR TABLE users`), only the specified tables exist in the shadow schema. Other tables fall through to `public` via the search path.
+For per-table mode (`CALL autodb.mode(mode => 'synthetic', tables => 'users')`), only the specified tables exist in the shadow schema. Other tables fall through to `public` via the search path.
 
 ## Schema Introspection
 
@@ -113,8 +113,8 @@ The proxy operates at the PostgreSQL wire protocol level:
 
 1. Accepts TCP connections on the configured port
 2. Connects to the real database and injects `SET search_path` based on the current mode
-3. For each incoming message, checks if it starts with `AUTODB` (case-insensitive)
-4. **AUTODB commands** are parsed by the [participle](https://github.com/alecthomas/participle) parser and executed internally
+3. For each incoming message, checks if it starts with `CALL autodb.` (case-insensitive)
+4. **AUTODB commands** are parsed and executed internally
 5. **Standard SQL** is forwarded as raw bytes to the real database
 6. Responses from the database are relayed back to the client as-is
 7. On mode changes, a new `SET search_path` is injected transparently

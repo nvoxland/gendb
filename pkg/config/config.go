@@ -25,7 +25,7 @@ type RealDBConfig struct {
 }
 
 type ShadowDBConfig struct {
-	Schema string `yaml:"schema"` // schema name for synthetic data (default: autodb_shadow)
+	Key string `yaml:"key"` // key for shadow schema naming: {source_schema}_{key} (default: autodb)
 }
 
 type LLMConfig struct {
@@ -66,7 +66,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Connection: ConnectionConfig{
 			Shadow: ShadowDBConfig{
-				Schema: "autodb_shadow",
+				Key: "autodb",
 			},
 		},
 		LLM: LLMConfig{

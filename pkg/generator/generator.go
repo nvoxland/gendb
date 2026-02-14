@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,11 +49,20 @@ func New(llmClient *llm.Client, cfg config.GenerationConfig, opts ...Option) *Ge
 
 // Generate generates synthetic data for all tables and inserts into the target database.
 func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, targetConn *pgx.Conn) error {
-	// Phase A: Get generation plan from LLM
-	fmt.Println("Analyzing schema with LLM...")
-	plan, err := g.llmClient.AnalyzeSchema(ctx, sg)
-	if err != nil {
-		return fmt.Errorf("analyzing schema: %w", err)
+	var plan *llm.GenerationPlan
+
+	if g.llmClient != nil {
+		// Phase A: Get generation plan from LLM
+		fmt.Println("Analyzing schema with LLM...")
+		var err error
+		plan, err = g.llmClient.AnalyzeSchema(ctx, sg)
+		if err != nil {
+			return fmt.Errorf("analyzing schema: %w", err)
+		}
+	} else {
+		// No LLM configured — build a type-based fallback plan
+		fmt.Println("No LLM configured, using type-based generation...")
+		plan = g.buildFallbackPlan(sg)
 	}
 
 	// Apply config overrides
@@ -142,6 +152,40 @@ func (g *Generator) applyConfigOverrides(plan *llm.GenerationPlan, sg *schema.Sc
 			plan.Tables[table.Name] = tablePlan
 		}
 	}
+}
+
+// buildFallbackPlan creates a generation plan using type-based heuristics when no LLM is available.
+func (g *Generator) buildFallbackPlan(sg *schema.SchemaGraph) *llm.GenerationPlan {
+	plan := &llm.GenerationPlan{
+		Tables: make(map[string]llm.TablePlan),
+	}
+	for _, table := range sg.Tables {
+		tp := llm.TablePlan{Columns: make(map[string]llm.ColumnPlan)}
+		for _, col := range table.Columns {
+			// Skip columns with defaults that look auto-generated, generated columns, or serial types
+			if col.IsGenerated {
+				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
+				continue
+			}
+			if strings.Contains(col.DefaultValue, "nextval(") || strings.Contains(col.DefaultValue, "gen_random_uuid()") {
+				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
+				continue
+			}
+			if strings.Contains(strings.ToLower(col.DataType), "serial") {
+				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
+				continue
+			}
+			// FK columns are handled by the FK resolver
+			if fkTarget(table, col.Name) != "" {
+				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
+				continue
+			}
+			// Default: use type-based generation (the "default" case in generateValue)
+			tp.Columns[col.Name] = llm.ColumnPlan{Generator: "type_based"}
+		}
+		plan.Tables[table.Name] = tp
+	}
+	return plan
 }
 
 func (g *Generator) generateTable(ctx context.Context, table *schema.Table, plan llm.TablePlan, rowCount int, pkValues map[string][]map[string]any) ([]map[string]any, error) {
@@ -318,6 +362,22 @@ func (g *Generator) generateValue(ctx context.Context, col *schema.Column, plan 
 	}
 }
 
+var maxLengthRe = regexp.MustCompile(`\((\d+)\)`)
+
+// parseMaxLength extracts the numeric length from type strings like
+// "character varying(20)" or "varchar(50)". Returns 0 if no length is found.
+func parseMaxLength(dataType string) int {
+	m := maxLengthRe.FindStringSubmatch(dataType)
+	if len(m) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 func (g *Generator) generateByType(col *schema.Column) (any, error) {
 	dt := strings.ToLower(col.DataType)
 	switch {
@@ -328,7 +388,15 @@ func (g *Generator) generateByType(col *schema.Column) (any, error) {
 	case strings.Contains(dt, "bool"):
 		return g.faker.Bool(), nil
 	case strings.Contains(dt, "text"), strings.Contains(dt, "varchar"), strings.Contains(dt, "char"):
-		return g.faker.Sentence(5), nil
+		maxLen := parseMaxLength(col.DataType)
+		if maxLen > 0 && maxLen <= 5 {
+			return g.faker.LetterN(uint(maxLen)), nil
+		}
+		val := g.faker.Sentence(5)
+		if maxLen > 0 && len(val) > maxLen {
+			val = val[:maxLen]
+		}
+		return val, nil
 	case strings.Contains(dt, "numeric"), strings.Contains(dt, "decimal"), strings.Contains(dt, "money"):
 		return g.faker.Price(1.0, 999.99), nil
 	case strings.Contains(dt, "float"), strings.Contains(dt, "double"), strings.Contains(dt, "real"):

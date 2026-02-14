@@ -6,7 +6,7 @@
 
 - **LLM-driven generation** — An LLM analyzes your schema (column names, types, constraints) and picks the best data generator for each column
 - **Wire protocol proxy** — A PostgreSQL proxy intercepts connections and routes queries to your real or shadow database
-- **AUTODB SQL** — A control language you send through any standard PostgreSQL connection to switch modes, regenerate data, and configure generators on the fly
+- **AUTODB SQL** — Control commands using standard `CALL autodb.*()` syntax, sent through any PostgreSQL connection to switch modes, regenerate data, and configure generators on the fly
 - **Full CRUD against synthetic data** — The shadow schema contains real PostgreSQL tables; reads and writes work normally
 - **Reproducible** — Set a seed for deterministic data generation across runs
 - **Zero application changes** — Point your app at the proxy and switch between real and synthetic data with a single command
@@ -39,7 +39,7 @@ psql -h localhost -p 5433 -U user mydb
 ```
 
 ```sql
-AUTODB MODE SYNTHETIC;
+CALL autodb.mode(mode => 'synthetic');
 ```
 
 ## Building from Source

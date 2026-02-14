@@ -9,11 +9,12 @@ func TestIsAutoDBCommand(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"AUTODB MODE SYNTHETIC", true},
-		{"autodb mode synthetic", true},
-		{"  AUTODB SHOW STATUS", true},
+		{"CALL autodb.mode(mode => 'synthetic')", true},
+		{"call autodb.mode(mode => 'synthetic')", true},
+		{"  CALL autodb.show_status()", true},
 		{"SELECT * FROM users", false},
-		{"AUTO", false},
+		{"CALL other.", false},
+		{"CALL", false},
 		{"", false},
 	}
 
@@ -26,7 +27,7 @@ func TestIsAutoDBCommand(t *testing.T) {
 }
 
 func TestParseModeSynthetic(t *testing.T) {
-	cmd, err := Parse("AUTODB MODE SYNTHETIC")
+	cmd, err := Parse("CALL autodb.mode(mode => 'synthetic')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestParseModeSynthetic(t *testing.T) {
 }
 
 func TestParseModeReal(t *testing.T) {
-	cmd, err := Parse("AUTODB MODE REAL")
+	cmd, err := Parse("CALL autodb.mode(mode => 'real')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestParseModeReal(t *testing.T) {
 }
 
 func TestParseModeSyntheticForTable(t *testing.T) {
-	cmd, err := Parse("AUTODB MODE SYNTHETIC FOR TABLE users, orders")
+	cmd, err := Parse("CALL autodb.mode(mode => 'synthetic', tables => 'users,orders')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestParseModeSyntheticForTable(t *testing.T) {
 }
 
 func TestParseGenerateTable(t *testing.T) {
-	cmd, err := Parse("AUTODB GENERATE TABLE users ROWS 500")
+	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users', rows => 500)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestParseGenerateTable(t *testing.T) {
 }
 
 func TestParseGenerateTableWithSeed(t *testing.T) {
-	cmd, err := Parse("AUTODB GENERATE TABLE users ROWS 500 SEED 42")
+	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users', rows => 500, seed => 42)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,23 +107,36 @@ func TestParseGenerateTableWithSeed(t *testing.T) {
 }
 
 func TestParseGenerateAll(t *testing.T) {
-	cmd, err := Parse("AUTODB GENERATE ALL ROWS 100")
+	cmd, err := Parse("CALL autodb.generate_data()")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Generate == nil {
 		t.Fatal("expected Generate command")
 	}
-	if !cmd.Generate.All {
-		t.Error("expected All=true")
+	if cmd.Generate.Table != "" {
+		t.Errorf("expected empty table for all-tables generate, got %q", cmd.Generate.Table)
 	}
-	if cmd.Generate.Rows != 100 {
-		t.Errorf("got rows %d, want 100", cmd.Generate.Rows)
+}
+
+func TestParseGenerateDataNoRows(t *testing.T) {
+	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Generate == nil {
+		t.Fatal("expected Generate command")
+	}
+	if cmd.Generate.Table != "users" {
+		t.Errorf("got table %q, want users", cmd.Generate.Table)
+	}
+	if cmd.Generate.Rows != 0 {
+		t.Errorf("expected rows 0 (default), got %d", cmd.Generate.Rows)
 	}
 }
 
 func TestParseResetTable(t *testing.T) {
-	cmd, err := Parse("AUTODB RESET TABLE users")
+	cmd, err := Parse("CALL autodb.reset(table_name => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,33 +149,33 @@ func TestParseResetTable(t *testing.T) {
 }
 
 func TestParseResetAll(t *testing.T) {
-	cmd, err := Parse("AUTODB RESET ALL")
+	cmd, err := Parse("CALL autodb.reset()")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Reset == nil {
 		t.Fatal("expected Reset command")
 	}
-	if !cmd.Reset.All {
-		t.Error("expected All=true")
+	if cmd.Reset.Table != "" {
+		t.Errorf("expected empty table for reset all, got %q", cmd.Reset.Table)
 	}
 }
 
 func TestParseSetModelLocal(t *testing.T) {
-	cmd, err := Parse("AUTODB SET MODEL LOCAL")
+	cmd, err := Parse("CALL autodb.set_model(name => 'local')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Set == nil || cmd.Set.Model == nil {
 		t.Fatal("expected Set Model command")
 	}
-	if !cmd.Set.Model.Local {
-		t.Error("expected Local=true")
+	if cmd.Set.Model.Name != "local" {
+		t.Errorf("got name %q, want local", cmd.Set.Model.Name)
 	}
 }
 
 func TestParseSetModelWithKey(t *testing.T) {
-	cmd, err := Parse("AUTODB SET MODEL 'openai/gpt-4o' KEY 'sk-abc123'")
+	cmd, err := Parse("CALL autodb.set_model(name => 'openai/gpt-4o', key => 'sk-abc123')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +191,7 @@ func TestParseSetModelWithKey(t *testing.T) {
 }
 
 func TestParseSetSeed(t *testing.T) {
-	cmd, err := Parse("AUTODB SET SEED 42")
+	cmd, err := Parse("CALL autodb.set_seed(value => 42)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +204,7 @@ func TestParseSetSeed(t *testing.T) {
 }
 
 func TestParseSetDefaultRows(t *testing.T) {
-	cmd, err := Parse("AUTODB SET DEFAULT_ROWS 100")
+	cmd, err := Parse("CALL autodb.set_default_rows(value => 100)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +217,7 @@ func TestParseSetDefaultRows(t *testing.T) {
 }
 
 func TestParseSetTableColumnGenerator(t *testing.T) {
-	cmd, err := Parse("AUTODB SET TABLE users COLUMN email GENERATOR 'internet.email'")
+	cmd, err := Parse("CALL autodb.set_column(table_name => 'users', column_name => 'email', generator => 'internet.email')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +236,7 @@ func TestParseSetTableColumnGenerator(t *testing.T) {
 }
 
 func TestParseSetTableColumnWithPrompt(t *testing.T) {
-	cmd, err := Parse("AUTODB SET TABLE users COLUMN bio GENERATOR 'llm' PROMPT 'Write a short bio'")
+	cmd, err := Parse("CALL autodb.set_column(table_name => 'users', column_name => 'bio', generator => 'llm', prompt => 'Write a short bio')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +252,7 @@ func TestParseSetTableColumnWithPrompt(t *testing.T) {
 }
 
 func TestParseSetTableColumnWithValues(t *testing.T) {
-	cmd, err := Parse("AUTODB SET TABLE users COLUMN role GENERATOR 'one_of' VALUES ('admin', 'user', 'mod')")
+	cmd, err := Parse("CALL autodb.set_column(table_name => 'users', column_name => 'role', generator => 'one_of', values => 'admin,user,mod')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +268,7 @@ func TestParseSetTableColumnWithValues(t *testing.T) {
 }
 
 func TestParseShowStatus(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW STATUS")
+	cmd, err := Parse("CALL autodb.show_status()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +281,7 @@ func TestParseShowStatus(t *testing.T) {
 }
 
 func TestParseShowTables(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW TABLES")
+	cmd, err := Parse("CALL autodb.show_tables()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +291,7 @@ func TestParseShowTables(t *testing.T) {
 }
 
 func TestParseShowTable(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW TABLE users")
+	cmd, err := Parse("CALL autodb.show_table(table_name => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +304,7 @@ func TestParseShowTable(t *testing.T) {
 }
 
 func TestParseShowConfig(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW CONFIG")
+	cmd, err := Parse("CALL autodb.show_config()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +314,7 @@ func TestParseShowConfig(t *testing.T) {
 }
 
 func TestParseShowGenerationPlan(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW GENERATION PLAN")
+	cmd, err := Parse("CALL autodb.show_generation_plan()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +327,7 @@ func TestParseShowGenerationPlan(t *testing.T) {
 }
 
 func TestParseShowGenerationPlanForTable(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW GENERATION PLAN FOR TABLE users")
+	cmd, err := Parse("CALL autodb.show_generation_plan(table_name => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +340,7 @@ func TestParseShowGenerationPlanForTable(t *testing.T) {
 }
 
 func TestParseSyncSchema(t *testing.T) {
-	cmd, err := Parse("AUTODB SYNC SCHEMA")
+	cmd, err := Parse("CALL autodb.sync_schema()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +353,7 @@ func TestParseSyncSchema(t *testing.T) {
 }
 
 func TestParseSemicolon(t *testing.T) {
-	cmd, err := Parse("AUTODB MODE SYNTHETIC;")
+	cmd, err := Parse("CALL autodb.mode(mode => 'synthetic');")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +363,7 @@ func TestParseSemicolon(t *testing.T) {
 }
 
 func TestParseCaseInsensitive(t *testing.T) {
-	cmd, err := Parse("autodb mode synthetic")
+	cmd, err := Parse("call Autodb.Mode(mode => 'synthetic')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +373,7 @@ func TestParseCaseInsensitive(t *testing.T) {
 }
 
 func TestParseCreateProfile(t *testing.T) {
-	cmd, err := Parse("AUTODB CREATE PROFILE 'load-test' (TABLE users ROWS 100000, TABLE orders ROWS 500000)")
+	cmd, err := Parse("CALL autodb.create_profile(name => 'load-test', tables => 'users:100000,orders:500000')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +392,7 @@ func TestParseCreateProfile(t *testing.T) {
 }
 
 func TestParseUseProfile(t *testing.T) {
-	cmd, err := Parse("AUTODB USE PROFILE 'load-test'")
+	cmd, err := Parse("CALL autodb.use_profile(name => 'load-test')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +405,7 @@ func TestParseUseProfile(t *testing.T) {
 }
 
 func TestParseDropProfile(t *testing.T) {
-	cmd, err := Parse("AUTODB DROP PROFILE 'load-test'")
+	cmd, err := Parse("CALL autodb.drop_profile(name => 'load-test')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +418,7 @@ func TestParseDropProfile(t *testing.T) {
 }
 
 func TestParseShowProfiles(t *testing.T) {
-	cmd, err := Parse("AUTODB SHOW PROFILES")
+	cmd, err := Parse("CALL autodb.show_profiles()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,15 +427,110 @@ func TestParseShowProfiles(t *testing.T) {
 	}
 }
 
+func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
+	cmd, err := Parse(`CALL autodb.generate_data(table_name => "test1")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Generate == nil {
+		t.Fatal("expected Generate command")
+	}
+	if cmd.Generate.Table != "test1" {
+		t.Errorf("got table %q, want test1", cmd.Generate.Table)
+	}
+}
+
+func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
+	cmd, err := Parse(`CALL autodb.generate_data(table_name => "test1", rows => 100)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Generate == nil {
+		t.Fatal("expected Generate command")
+	}
+	if cmd.Generate.Table != "test1" {
+		t.Errorf("got table %q, want test1", cmd.Generate.Table)
+	}
+	if cmd.Generate.Rows != 100 {
+		t.Errorf("got rows %d, want 100", cmd.Generate.Rows)
+	}
+}
+
 func TestParseInvalidCommand(t *testing.T) {
-	_, err := Parse("AUTODB INVALID COMMAND")
+	_, err := Parse("CALL autodb.nonexistent()")
 	if err == nil {
 		t.Error("expected parse error for invalid command")
 	}
 }
 
+func TestParseReturnGenerated(t *testing.T) {
+	cmd, err := Parse("CALL autodb.return_generated(table_name => 'test1')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnGenerated == nil {
+		t.Fatal("expected ReturnGenerated command")
+	}
+	if cmd.ReturnGenerated.Table != "test1" {
+		t.Errorf("got table %q, want test1", cmd.ReturnGenerated.Table)
+	}
+}
+
+func TestParseReturnGeneratedMissingTable(t *testing.T) {
+	_, err := Parse("CALL autodb.return_generated()")
+	if err == nil {
+		t.Error("expected parse error for missing table_name")
+	}
+}
+
+func TestParseReturnGeneratedCaseInsensitive(t *testing.T) {
+	cmd, err := Parse("call autodb.Return_Generated(table_name => 'users')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnGenerated == nil {
+		t.Fatal("expected ReturnGenerated command")
+	}
+	if cmd.ReturnGenerated.Table != "users" {
+		t.Errorf("got table %q, want users", cmd.ReturnGenerated.Table)
+	}
+}
+
+func TestParseReturnActual(t *testing.T) {
+	cmd, err := Parse("CALL autodb.return_actual(table_name => 'test1')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnActual == nil {
+		t.Fatal("expected ReturnActual command")
+	}
+	if cmd.ReturnActual.Table != "test1" {
+		t.Errorf("got table %q, want test1", cmd.ReturnActual.Table)
+	}
+}
+
+func TestParseReturnActualMissingTable(t *testing.T) {
+	_, err := Parse("CALL autodb.return_actual()")
+	if err == nil {
+		t.Error("expected parse error for missing table_name")
+	}
+}
+
+func TestParseReturnActualCaseInsensitive(t *testing.T) {
+	cmd, err := Parse("call autodb.Return_Actual(table_name => 'orders')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnActual == nil {
+		t.Fatal("expected ReturnActual command")
+	}
+	if cmd.ReturnActual.Table != "orders" {
+		t.Errorf("got table %q, want orders", cmd.ReturnActual.Table)
+	}
+}
+
 func TestParseRegenerateTable(t *testing.T) {
-	cmd, err := Parse("AUTODB REGENERATE TABLE users ROWS 200")
+	cmd, err := Parse("CALL autodb.regenerate_data(table_name => 'users', rows => 200)")
 	if err != nil {
 		t.Fatal(err)
 	}

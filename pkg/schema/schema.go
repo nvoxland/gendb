@@ -43,6 +43,15 @@ type Index struct {
 	IsUnique bool
 }
 
+// SetTables sets the tables and rebuilds the index.
+func (sg *SchemaGraph) SetTables(tables []*Table) {
+	sg.Tables = tables
+	sg.tableIndex = make(map[string]*Table, len(tables))
+	for _, t := range tables {
+		sg.tableIndex[t.Name] = t
+	}
+}
+
 // TableByName returns a table by name, or nil if not found.
 func (sg *SchemaGraph) TableByName(name string) *Table {
 	if sg.tableIndex == nil {

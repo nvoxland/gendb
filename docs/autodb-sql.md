@@ -1,6 +1,6 @@
 # AUTODB SQL Reference
 
-AUTODB SQL is a control language sent through standard PostgreSQL connections. Any client that can send SQL — `psql`, application drivers, database GUIs — can send AUTODB commands.
+AUTODB SQL commands use standard PostgreSQL `CALL` procedure syntax with named arguments. Any client that can send SQL — `psql`, application drivers, database GUIs — can send AUTODB commands. The proxy intercepts `CALL autodb.*()` statements before they reach PostgreSQL, so no actual procedures need to exist in the database.
 
 Commands are case-insensitive. Trailing semicolons are optional.
 
@@ -8,188 +8,179 @@ Commands are case-insensitive. Trailing semicolons are optional.
 
 ## Mode
 
-### `AUTODB MODE SYNTHETIC|REAL`
+### `CALL autodb.mode(mode => '...')`
 
 Switch the proxy to route queries to the synthetic (shadow) or real database.
 
 ```sql
 -- Route all queries to the shadow database
-AUTODB MODE SYNTHETIC;
+CALL autodb.mode(mode => 'synthetic');
 
 -- Route all queries to the real database
-AUTODB MODE REAL;
+CALL autodb.mode(mode => 'real');
 ```
 
-### `AUTODB MODE ... FOR TABLE`
+### `CALL autodb.mode(mode => '...', tables => '...')`
 
 Switch mode for specific tables only. Unlisted tables keep their current mode.
 
 ```sql
-AUTODB MODE SYNTHETIC FOR TABLE users, orders;
-AUTODB MODE REAL FOR TABLE payments;
+CALL autodb.mode(mode => 'synthetic', tables => 'users,orders');
+CALL autodb.mode(mode => 'real', tables => 'payments');
 ```
 
 ---
 
 ## Generate
 
-### `AUTODB GENERATE TABLE <name> [ROWS <n>] [SEED <n>]`
+### `CALL autodb.generate_data(...)`
 
-Generate (append) synthetic rows for a specific table.
-
-```sql
-AUTODB GENERATE TABLE users ROWS 500;
-AUTODB GENERATE TABLE orders ROWS 1000 SEED 42;
-```
-
-### `AUTODB GENERATE ALL [ROWS <n>]`
-
-Generate rows for all tables.
+Generate (append) synthetic rows for a specific table, or all tables if no arguments are given.
 
 ```sql
-AUTODB GENERATE ALL ROWS 200;
+CALL autodb.generate_data(table_name => 'users', rows => 500);
+CALL autodb.generate_data(table_name => 'orders', rows => 1000, seed => 42);
+
+-- Generate rows for all tables
+CALL autodb.generate_data();
 ```
 
 !!! note
-    `AUTODB REGENERATE` is accepted as an alias for `AUTODB GENERATE`.
+    `CALL autodb.regenerate_data(...)` is accepted as an alias for `CALL autodb.generate_data(...)`.
 
 ---
 
 ## Reset
 
-### `AUTODB RESET TABLE <name>`
+### `CALL autodb.reset(...)`
 
-Truncate and regenerate a single table.
-
-```sql
-AUTODB RESET TABLE users;
-```
-
-### `AUTODB RESET ALL`
-
-Truncate and regenerate all tables.
+Truncate and regenerate data. Pass a `table_name` to reset a single table, or call with no arguments to reset all tables.
 
 ```sql
-AUTODB RESET ALL;
+-- Reset a single table
+CALL autodb.reset(table_name => 'users');
+
+-- Reset all tables
+CALL autodb.reset();
 ```
 
 ---
 
 ## Set
 
-### `AUTODB SET MODEL '<name>' [KEY '<key>']`
+### `CALL autodb.set_model(name => '...', key => '...')`
 
 Configure the LLM model. Provide an API key for cloud providers.
 
 ```sql
-AUTODB SET MODEL 'gpt-4o-mini' KEY 'sk-...';
+CALL autodb.set_model(name => 'gpt-4o-mini', key => 'sk-...');
 ```
 
-### `AUTODB SET MODEL LOCAL`
+### `CALL autodb.set_model(name => 'local')`
 
 Switch to the local Ollama model.
 
 ```sql
-AUTODB SET MODEL LOCAL;
+CALL autodb.set_model(name => 'local');
 ```
 
-### `AUTODB SET SEED <n>`
+### `CALL autodb.set_seed(value => ...)`
 
 Set the random seed for reproducible generation.
 
 ```sql
-AUTODB SET SEED 42;
+CALL autodb.set_seed(value => 42);
 ```
 
-### `AUTODB SET DEFAULT_ROWS <n>`
+### `CALL autodb.set_default_rows(value => ...)`
 
 Set the default number of rows generated per table.
 
 ```sql
-AUTODB SET DEFAULT_ROWS 500;
+CALL autodb.set_default_rows(value => 500);
 ```
 
-### `AUTODB SET TABLE <table> COLUMN <column> GENERATOR '<generator>' [PROMPT '<prompt>'] [VALUES (...)]`
+### `CALL autodb.set_column(...)`
 
 Override the generator for a specific column.
 
 ```sql
 -- Use a specific generator
-AUTODB SET TABLE users COLUMN email GENERATOR 'internet.email';
+CALL autodb.set_column(table_name => 'users', column_name => 'email', generator => 'internet.email');
 
 -- Use LLM with a prompt
-AUTODB SET TABLE users COLUMN bio GENERATOR 'llm' PROMPT 'Write a short professional bio';
+CALL autodb.set_column(table_name => 'users', column_name => 'bio', generator => 'llm', prompt => 'Write a short professional bio');
 
 -- Use a fixed set of values
-AUTODB SET TABLE users COLUMN role GENERATOR 'one_of' VALUES ('admin', 'user', 'moderator');
+CALL autodb.set_column(table_name => 'users', column_name => 'role', generator => 'one_of', values => 'admin,user,moderator');
 ```
 
 ---
 
 ## Show
 
-### `AUTODB SHOW STATUS`
+### `CALL autodb.show_status()`
 
 Display current mode, connection info, and shadow DB state.
 
 ```sql
-AUTODB SHOW STATUS;
+CALL autodb.show_status();
 ```
 
-### `AUTODB SHOW TABLES`
+### `CALL autodb.show_tables()`
 
 List all tables known to AutoDB.
 
 ```sql
-AUTODB SHOW TABLES;
+CALL autodb.show_tables();
 ```
 
-### `AUTODB SHOW CONFIG`
+### `CALL autodb.show_config()`
 
 Display the current configuration.
 
 ```sql
-AUTODB SHOW CONFIG;
+CALL autodb.show_config();
 ```
 
-### `AUTODB SHOW TABLE <name>`
+### `CALL autodb.show_table(table_name => '...')`
 
 Show details for a specific table (columns, types, constraints).
 
 ```sql
-AUTODB SHOW TABLE users;
+CALL autodb.show_table(table_name => 'users');
 ```
 
-### `AUTODB SHOW GENERATION PLAN [FOR TABLE <name>]`
+### `CALL autodb.show_generation_plan(...)`
 
 Display the generation plan — which generator is assigned to each column.
 
 ```sql
 -- Show plan for all tables
-AUTODB SHOW GENERATION PLAN;
+CALL autodb.show_generation_plan();
 
 -- Show plan for a specific table
-AUTODB SHOW GENERATION PLAN FOR TABLE users;
+CALL autodb.show_generation_plan(table_name => 'users');
 ```
 
-### `AUTODB SHOW PROFILES`
+### `CALL autodb.show_profiles()`
 
 List all saved profiles.
 
 ```sql
-AUTODB SHOW PROFILES;
+CALL autodb.show_profiles();
 ```
 
 ---
 
 ## Sync
 
-### `AUTODB SYNC SCHEMA`
+### `CALL autodb.sync_schema()`
 
 Re-introspect the real database and apply schema changes to the shadow database.
 
 ```sql
-AUTODB SYNC SCHEMA;
+CALL autodb.sync_schema();
 ```
 
 ---
@@ -198,27 +189,27 @@ AUTODB SYNC SCHEMA;
 
 Profiles let you save named configurations for how many rows to generate per table.
 
-### `AUTODB CREATE PROFILE '<name>' (TABLE <t> ROWS <n>, ...)`
+### `CALL autodb.create_profile(name => '...', tables => '...')`
 
-Create a named profile.
+Create a named profile. Tables are specified as `table:rows` pairs separated by commas.
 
 ```sql
-AUTODB CREATE PROFILE 'small' (TABLE users ROWS 10, TABLE orders ROWS 50);
-AUTODB CREATE PROFILE 'large' (TABLE users ROWS 10000, TABLE orders ROWS 50000);
+CALL autodb.create_profile(name => 'small', tables => 'users:10,orders:50');
+CALL autodb.create_profile(name => 'large', tables => 'users:10000,orders:50000');
 ```
 
-### `AUTODB USE PROFILE '<name>'`
+### `CALL autodb.use_profile(name => '...')`
 
 Activate a profile.
 
 ```sql
-AUTODB USE PROFILE 'small';
+CALL autodb.use_profile(name => 'small');
 ```
 
-### `AUTODB DROP PROFILE '<name>'`
+### `CALL autodb.drop_profile(name => '...')`
 
 Delete a profile.
 
 ```sql
-AUTODB DROP PROFILE 'small';
+CALL autodb.drop_profile(name => 'small');
 ```

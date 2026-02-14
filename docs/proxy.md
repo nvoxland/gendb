@@ -5,7 +5,7 @@ The AutoDB proxy is a PostgreSQL wire protocol relay that sits between your appl
 ## What the Proxy Does
 
 - **Byte-level relay** — Standard SQL queries are forwarded as raw bytes with no parsing or modification
-- **AUTODB command interception** — Queries starting with `AUTODB` are intercepted, parsed, and executed locally by the proxy
+- **AUTODB command interception** — Queries starting with `CALL autodb.` are intercepted, parsed, and executed locally by the proxy
 - **Search path routing** — Based on the current mode (real or synthetic), the proxy sets `search_path` to control which schema queries resolve against
 - **Per-table routing** — Different tables can be routed to different schemas simultaneously via PostgreSQL's schema resolution
 
@@ -33,14 +33,14 @@ Once connected through the proxy, switch modes with AUTODB SQL:
 
 ```sql
 -- All queries resolve against the shadow schema (autodb_shadow)
-AUTODB MODE SYNTHETIC;
+CALL autodb.mode(mode => 'synthetic');
 
 -- All queries resolve against the real schema (public)
-AUTODB MODE REAL;
+CALL autodb.mode(mode => 'real');
 
 -- Switch only specific tables
-AUTODB MODE SYNTHETIC FOR TABLE users, orders;
-AUTODB MODE REAL FOR TABLE payments;
+CALL autodb.mode(mode => 'synthetic', tables => 'users,orders');
+CALL autodb.mode(mode => 'real', tables => 'payments');
 ```
 
 ## How Routing Works
@@ -62,7 +62,7 @@ When you set mode for specific tables, only those tables change. All other table
 ```sql
 -- Start in real mode (default)
 -- Now switch only users to synthetic
-AUTODB MODE SYNTHETIC FOR TABLE users;
+CALL autodb.mode(mode => 'synthetic', tables => 'users');
 
 -- Queries against "users" → autodb_shadow.users (synthetic)
 -- Queries against everything else → public.* (real data)
@@ -74,18 +74,18 @@ All [AUTODB SQL](autodb-sql.md) commands work through the proxy. You can reconfi
 
 ```sql
 -- Change a column's generator
-AUTODB SET TABLE users COLUMN email GENERATOR 'internet.email';
+CALL autodb.set_column(table_name => 'users', column_name => 'email', generator => 'internet.email');
 
 -- Regenerate data with the new settings
-AUTODB RESET ALL;
+CALL autodb.reset();
 
 -- Check the generation plan
-AUTODB SHOW GENERATION PLAN FOR TABLE users;
+CALL autodb.show_generation_plan(table_name => 'users');
 ```
 
 ## How Standard SQL Passes Through
 
-The proxy does **not** parse standard SQL. When a query does not start with `AUTODB` (case-insensitive), the raw bytes are forwarded to the database and the response is relayed back. This means:
+The proxy does **not** parse standard SQL. When a query does not start with `CALL autodb.` (case-insensitive), the raw bytes are forwarded to the database and the response is relayed back. This means:
 
 - No SQL compatibility issues — any valid PostgreSQL query works
 - No performance overhead from SQL parsing
