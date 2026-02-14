@@ -1,10 +1,10 @@
 .PHONY: build clean test lint run docs docs-serve docs-docker
 
-BINARY=autodb
+BINARY=gendb
 BUILD_DIR=bin
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/autodb
+	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/gendb
 
 clean:
 	rm -rf $(BUILD_DIR)

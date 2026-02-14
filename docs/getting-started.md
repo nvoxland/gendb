@@ -11,26 +11,26 @@
 ### From source
 
 ```bash
-go install github.com/nvoxland/autodb/cmd/autodb@latest
+go install github.com/nvoxland/gendb/cmd/gendb@latest
 ```
 
 ### Build locally
 
 ```bash
-git clone https://github.com/nvoxland/autodb.git
-cd autodb
+git clone https://github.com/nvoxland/gendb.git
+cd gendb
 make build
-# binary is at bin/autodb
+# binary is at bin/gendb
 ```
 
 ## Walkthrough
 
 ### 1. Start the proxy
 
-Point AutoDB at your real database and start the proxy:
+Point GenDB at your real database and start the proxy:
 
 ```bash
-autodb serve --db-database mydb --port 5433
+gendb serve --db-database mydb --port 5433
 ```
 
 ### 2. Connect through the proxy
@@ -41,23 +41,23 @@ psql -h localhost -p 5433 -U user mydb
 
 ### 3. Generate data and toggle routing
 
-From any connection through the proxy, send AUTODB SQL commands:
+From any connection through the proxy, send GENDB SQL commands:
 
 ```sql
 -- Generate synthetic data for a table
-CALL autodb.generate_data(table_name => 'users', rows => 500);
+CALL gendb.generate_data(table_name => 'users', rows => 500);
 
 -- Route queries for "users" to the generated data
-CALL autodb.return_generated(table_name => 'users');
+CALL gendb.return_generated(table_name => 'users');
 
 -- Switch back to real data
-CALL autodb.return_actual(table_name => 'users');
+CALL gendb.return_actual(table_name => 'users');
 ```
 
 ## Next Steps
 
 - [CLI Reference](cli.md) — all commands and flags
-- [AUTODB SQL Reference](autodb-sql.md) — the full DSL
-- [Configuration](configuration.md) — customize `autodb.yaml`
+- [GENDB SQL Reference](gendb-sql.md) — the full DSL
+- [Configuration](configuration.md) — customize `gendb.yaml`
 - [LLM Setup](llm.md) — configure Ollama, OpenAI, or custom providers
 - [Data Generators](generators.md) — available generators and how they're selected

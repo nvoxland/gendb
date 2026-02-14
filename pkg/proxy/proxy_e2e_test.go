@@ -12,11 +12,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/nvoxland/autodb/pkg/config"
-	"github.com/nvoxland/autodb/pkg/generator"
-	"github.com/nvoxland/autodb/pkg/lang"
-	"github.com/nvoxland/autodb/pkg/schema"
-	"github.com/nvoxland/autodb/pkg/shadow"
+	"github.com/nvoxland/gendb/pkg/config"
+	"github.com/nvoxland/gendb/pkg/generator"
+	"github.com/nvoxland/gendb/pkg/lang"
+	"github.com/nvoxland/gendb/pkg/schema"
+	"github.com/nvoxland/gendb/pkg/shadow"
 )
 
 func TestConnFromContext(t *testing.T) {
@@ -256,7 +256,7 @@ func TestProxyE2E(t *testing.T) {
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-		Key:        "autodb",
+		Key:        "gendb",
 	}, executor)
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
@@ -348,7 +348,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	pgAddr := startPostgresContainer(t)
 	ctx := context.Background()
 
-	const testKey = "autodb"
+	const testKey = "gendb"
 
 	executor := lang.NewExecutor()
 
@@ -446,7 +446,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	}
 
 	// Generate data via the proxy's CALL interception.
-	_, err = conn.Exec(ctx, "CALL autodb.generate_data(table_name => 'test1', rows => '10')")
+	_, err = conn.Exec(ctx, "CALL gendb.generate_data(table_name => 'test1', rows => '10')")
 	if err != nil {
 		t.Fatalf("generate_data: %v", err)
 	}

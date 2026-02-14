@@ -6,26 +6,28 @@ import (
 	"strings"
 )
 
-// IsAutoDBCommand checks if a SQL string is a CALL autodb.* command (case-insensitive).
-func IsAutoDBCommand(sql string) bool {
+// IsGenDBCommand checks if a SQL string is a CALL gendb.* command (case-insensitive).
+func IsGenDBCommand(sql string) bool {
 	sql = strings.TrimSpace(sql)
-	if len(sql) < len("CALL autodb.") {
+	prefix := "call gendb."
+	if len(sql) < len(prefix) {
 		return false
 	}
-	return strings.EqualFold(sql[:12], "call autodb.")
+	return strings.EqualFold(sql[:len(prefix)], prefix)
 }
 
-// Parse parses a CALL autodb.xxx(...) command string into an AST.
+// Parse parses a CALL gendb.xxx(...) command string into an AST.
 func Parse(input string) (*Command, error) {
 	input = strings.TrimSpace(input)
 	input = strings.TrimSuffix(input, ";")
 	input = strings.TrimSpace(input)
 
-	// Strip "CALL autodb." prefix (case-insensitive)
-	if len(input) < 12 || !strings.EqualFold(input[:12], "call autodb.") {
-		return nil, fmt.Errorf("parse error: expected CALL autodb.* command")
+	// Strip "CALL gendb." prefix (case-insensitive)
+	prefix := "call gendb."
+	if len(input) < len(prefix) || !strings.EqualFold(input[:len(prefix)], prefix) {
+		return nil, fmt.Errorf("parse error: expected CALL gendb.* command")
 	}
-	rest := input[12:]
+	rest := input[len(prefix):]
 
 	// Extract procedure name and args
 	parenIdx := strings.Index(rest, "(")

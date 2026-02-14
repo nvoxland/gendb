@@ -1,4 +1,4 @@
-module github.com/nvoxland/autodb
+module github.com/nvoxland/gendb
 
 go 1.25.7
 

@@ -5,14 +5,14 @@ import (
 	"fmt"
 )
 
-// Result represents the output of an AUTODB command execution.
+// Result represents the output of an GENDB command execution.
 type Result struct {
-	Tag     string     // command completion tag, e.g. "AUTODB GENERATE DATA FOR users ROWS 500"
+	Tag     string     // command completion tag, e.g. "GENDB GENERATE DATA FOR users ROWS 500"
 	Columns []string   // column names for tabular results
 	Rows    [][]string // row data for tabular results
 }
 
-// Executor runs parsed AUTODB commands.
+// Executor runs parsed GENDB commands.
 type Executor struct {
 	OnGenerate        func(ctx context.Context, table string, rows int, seed *int64) error
 	OnReturnGenerated func(ctx context.Context, table string) error
@@ -34,7 +34,7 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command) (*Result, error) {
 	case cmd.ReturnActual != nil:
 		return e.execReturnActual(ctx, cmd.ReturnActual)
 	default:
-		return nil, fmt.Errorf("unrecognized AUTODB command")
+		return nil, fmt.Errorf("unrecognized GENDB command")
 	}
 }
 
@@ -48,9 +48,9 @@ func (e *Executor) execGenerate(ctx context.Context, cmd *GenerateCommand) (*Res
 	}
 
 	if cmd.Table == "" {
-		return &Result{Tag: fmt.Sprintf("AUTODB GENERATE DATA ROWS %d", cmd.Rows)}, nil
+		return &Result{Tag: fmt.Sprintf("GENDB GENERATE DATA ROWS %d", cmd.Rows)}, nil
 	}
-	return &Result{Tag: fmt.Sprintf("AUTODB GENERATE DATA FOR %s ROWS %d", cmd.Table, cmd.Rows)}, nil
+	return &Result{Tag: fmt.Sprintf("GENDB GENERATE DATA FOR %s ROWS %d", cmd.Table, cmd.Rows)}, nil
 }
 
 func (e *Executor) execReturnGenerated(ctx context.Context, cmd *ReturnGeneratedCommand) (*Result, error) {
@@ -60,7 +60,7 @@ func (e *Executor) execReturnGenerated(ctx context.Context, cmd *ReturnGenerated
 	if err := e.OnReturnGenerated(ctx, cmd.Table); err != nil {
 		return nil, err
 	}
-	return &Result{Tag: fmt.Sprintf("AUTODB RETURN GENERATED %s", cmd.Table)}, nil
+	return &Result{Tag: fmt.Sprintf("GENDB RETURN GENERATED %s", cmd.Table)}, nil
 }
 
 func (e *Executor) execReturnActual(ctx context.Context, cmd *ReturnActualCommand) (*Result, error) {
@@ -70,5 +70,5 @@ func (e *Executor) execReturnActual(ctx context.Context, cmd *ReturnActualComman
 	if err := e.OnReturnActual(ctx, cmd.Table); err != nil {
 		return nil, err
 	}
-	return &Result{Tag: fmt.Sprintf("AUTODB RETURN ACTUAL %s", cmd.Table)}, nil
+	return &Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", cmd.Table)}, nil
 }

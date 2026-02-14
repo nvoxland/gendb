@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/nvoxland/autodb/pkg/lang"
+	"github.com/nvoxland/gendb/pkg/lang"
 )
 
 // Proxy is a PostgreSQL wire protocol proxy.
@@ -44,7 +44,7 @@ type session struct {
 type Config struct {
 	ListenAddr string // e.g. ":5433"
 	RealAddr   string // e.g. "localhost:5432"
-	Key        string // e.g. "autodb" — shadow schema is derived as {source_schema}_{key}
+	Key        string // e.g. "gendb" — shadow schema is derived as {source_schema}_{key}
 }
 
 // New creates a new proxy.
@@ -67,7 +67,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 	close(p.ready)
 
-	fmt.Printf("AutoDB proxy listening on %s\n", p.listenAddr)
+	fmt.Printf("GenDB proxy listening on %s\n", p.listenAddr)
 	fmt.Printf("  Real DB: %s\n", p.realAddr)
 
 	go func() {
@@ -173,12 +173,12 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 		return
 	}
 
-	// Main loop: intercept AUTODB commands, relay everything else
+	// Main loop: intercept GENDB commands, relay everything else
 	p.mainLoop(ctx, clientConn, backendConn, sess)
 }
 
 func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, sess *session) {
-	// Client -> Backend relay (with AUTODB interception)
+	// Client -> Backend relay (with GENDB interception)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -189,20 +189,20 @@ func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, 
 
 			data := buf[:n]
 
-			// Check if this is a Query message ('Q') with AUTODB prefix
+			// Check if this is a Query message ('Q') with GENDB prefix
 			if len(data) > 5 && data[0] == 'Q' {
 				query := extractQuery(data)
-				if lang.IsAutoDBCommand(query) {
-					p.handleAutoDBCommand(ctx, clientConn, sess, query)
+				if lang.IsGenDBCommand(query) {
+					p.handleGenDBCommand(ctx, clientConn, sess, query)
 					continue
 				}
 			}
 
-			// Check if this is a Parse message ('P') with AUTODB prefix
+			// Check if this is a Parse message ('P') with GENDB prefix
 			if len(data) > 5 && data[0] == 'P' {
 				query := extractParseQuery(data)
-				if lang.IsAutoDBCommand(query) {
-					p.handleAutoDBCommand(ctx, clientConn, sess, query)
+				if lang.IsGenDBCommand(query) {
+					p.handleGenDBCommand(ctx, clientConn, sess, query)
 					continue
 				}
 			}
@@ -270,7 +270,7 @@ func (sess *session) resumeRelay() {
 	close(ch) // unblock relay goroutine
 }
 
-func (p *Proxy) handleAutoDBCommand(ctx context.Context, clientConn net.Conn, sess *session, query string) {
+func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, sess *session, query string) {
 	cmd, err := lang.Parse(query)
 	if err != nil {
 		p.sendError(clientConn, err.Error())

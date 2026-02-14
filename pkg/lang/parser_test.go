@@ -4,14 +4,14 @@ import (
 	"testing"
 )
 
-func TestIsAutoDBCommand(t *testing.T) {
+func TestIsGenDBCommand(t *testing.T) {
 	tests := []struct {
 		input string
 		want  bool
 	}{
-		{"CALL autodb.generate_data(table_name => 'users')", true},
-		{"call autodb.return_generated(table_name => 'users')", true},
-		{"  CALL autodb.return_actual(table_name => 'users')", true},
+		{"CALL gendb.generate_data(table_name => 'users')", true},
+		{"call gendb.return_generated(table_name => 'users')", true},
+		{"  CALL gendb.return_actual(table_name => 'users')", true},
 		{"SELECT * FROM users", false},
 		{"CALL other.", false},
 		{"CALL", false},
@@ -19,15 +19,15 @@ func TestIsAutoDBCommand(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := IsAutoDBCommand(tt.input)
+		got := IsGenDBCommand(tt.input)
 		if got != tt.want {
-			t.Errorf("IsAutoDBCommand(%q) = %v, want %v", tt.input, got, tt.want)
+			t.Errorf("IsGenDBCommand(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }
 
 func TestParseGenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users', rows => 500)")
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 500)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestParseGenerateTable(t *testing.T) {
 }
 
 func TestParseGenerateTableWithSeed(t *testing.T) {
-	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users', rows => 500, seed => 42)")
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestParseGenerateTableWithSeed(t *testing.T) {
 }
 
 func TestParseGenerateAll(t *testing.T) {
-	cmd, err := Parse("CALL autodb.generate_data()")
+	cmd, err := Parse("CALL gendb.generate_data()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestParseGenerateAll(t *testing.T) {
 }
 
 func TestParseGenerateDataNoRows(t *testing.T) {
-	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users')")
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestParseGenerateDataNoRows(t *testing.T) {
 }
 
 func TestParseSemicolon(t *testing.T) {
-	cmd, err := Parse("CALL autodb.generate_data(table_name => 'users');")
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users');")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestParseSemicolon(t *testing.T) {
 }
 
 func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
-	cmd, err := Parse(`CALL autodb.generate_data(table_name => "test1")`)
+	cmd, err := Parse(`CALL gendb.generate_data(table_name => "test1")`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
 }
 
 func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
-	cmd, err := Parse(`CALL autodb.generate_data(table_name => "test1", rows => 100)`)
+	cmd, err := Parse(`CALL gendb.generate_data(table_name => "test1", rows => 100)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,14 +127,14 @@ func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
 }
 
 func TestParseInvalidCommand(t *testing.T) {
-	_, err := Parse("CALL autodb.nonexistent()")
+	_, err := Parse("CALL gendb.nonexistent()")
 	if err == nil {
 		t.Error("expected parse error for invalid command")
 	}
 }
 
 func TestParseReturnGenerated(t *testing.T) {
-	cmd, err := Parse("CALL autodb.return_generated(table_name => 'test1')")
+	cmd, err := Parse("CALL gendb.return_generated(table_name => 'test1')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,14 +147,14 @@ func TestParseReturnGenerated(t *testing.T) {
 }
 
 func TestParseReturnGeneratedMissingTable(t *testing.T) {
-	_, err := Parse("CALL autodb.return_generated()")
+	_, err := Parse("CALL gendb.return_generated()")
 	if err == nil {
 		t.Error("expected parse error for missing table_name")
 	}
 }
 
 func TestParseReturnGeneratedCaseInsensitive(t *testing.T) {
-	cmd, err := Parse("call autodb.Return_Generated(table_name => 'users')")
+	cmd, err := Parse("call gendb.Return_Generated(table_name => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestParseReturnGeneratedCaseInsensitive(t *testing.T) {
 }
 
 func TestParseReturnActual(t *testing.T) {
-	cmd, err := Parse("CALL autodb.return_actual(table_name => 'test1')")
+	cmd, err := Parse("CALL gendb.return_actual(table_name => 'test1')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,14 +180,14 @@ func TestParseReturnActual(t *testing.T) {
 }
 
 func TestParseReturnActualMissingTable(t *testing.T) {
-	_, err := Parse("CALL autodb.return_actual()")
+	_, err := Parse("CALL gendb.return_actual()")
 	if err == nil {
 		t.Error("expected parse error for missing table_name")
 	}
 }
 
 func TestParseReturnActualCaseInsensitive(t *testing.T) {
-	cmd, err := Parse("call autodb.Return_Actual(table_name => 'orders')")
+	cmd, err := Parse("call gendb.Return_Actual(table_name => 'orders')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestParseReturnActualCaseInsensitive(t *testing.T) {
 }
 
 func TestParseRegenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL autodb.regenerate_data(table_name => 'users', rows => 200)")
+	cmd, err := Parse("CALL gendb.regenerate_data(table_name => 'users', rows => 200)")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nvoxland/autodb/pkg/schema"
+	"github.com/nvoxland/gendb/pkg/schema"
 )
 
 // uniqueTracker enforces UNIQUE constraints during generation.

@@ -1,6 +1,6 @@
-site_name: AutoDB
+site_name: GenDB
 site_description: LLM-driven synthetic database for development & testing
-site_url: https://nvoxland.github.io/autodb/
+site_url: https://nvoxland.github.io/gendb/
 
 theme:
   name: material
@@ -47,7 +47,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - CLI Reference: cli.md
-  - AUTODB SQL Reference: autodb-sql.md
+  - GENDB SQL Reference: gendb-sql.md
   - Configuration: configuration.md
   - LLM Setup: llm.md
   - Data Generators: generators.md

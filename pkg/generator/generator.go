@@ -10,9 +10,9 @@ import (
 
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/jackc/pgx/v5"
-	"github.com/nvoxland/autodb/pkg/config"
-	"github.com/nvoxland/autodb/pkg/llm"
-	"github.com/nvoxland/autodb/pkg/schema"
+	"github.com/nvoxland/gendb/pkg/config"
+	"github.com/nvoxland/gendb/pkg/llm"
+	"github.com/nvoxland/gendb/pkg/schema"
 )
 
 // Generator produces synthetic data for a schema.
