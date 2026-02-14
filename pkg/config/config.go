@@ -1,6 +1,6 @@
 package config
 
-// Config holds the AutoDB configuration.
+// Config holds the GenDB configuration.
 type Config struct {
 	LLM        LLMConfig        `yaml:"llm"`
 	Generation GenerationConfig `yaml:"generation"`

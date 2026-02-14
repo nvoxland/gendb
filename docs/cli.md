@@ -1,21 +1,21 @@
 # CLI Reference
 
-## `autodb`
+## `gendb`
 
-AutoDB — synthetic database for development & testing.
+GenDB — synthetic database for development & testing.
 
 Creates a shadow schema with LLM-analyzed synthetic data inside your real PostgreSQL database. Developers can work against realistic data without production PII.
 
 ---
 
-## `autodb init`
+## `gendb init`
 
-Initialize AutoDB by introspecting the real database.
+Initialize GenDB by introspecting the real database.
 
-Connects to the real database, introspects the schema, and creates `autodb.yaml`.
+Connects to the real database, introspects the schema, and creates `gendb.yaml`.
 
 ```bash
-autodb init --url <connection-string>
+gendb init --url <connection-string>
 ```
 
 ### Flags
@@ -27,19 +27,19 @@ autodb init --url <connection-string>
 ### Example
 
 ```bash
-autodb init --url postgres://user:pass@localhost:5432/mydb
+gendb init --url postgres://user:pass@localhost:5432/mydb
 ```
 
 ---
 
-## `autodb up`
+## `gendb up`
 
 Create shadow schema, apply tables, and generate synthetic data.
 
-Creates an `autodb_shadow` schema inside your real database, clones the table structure from the `public` schema, and generates synthetic data using the configured LLM.
+Creates a `gendb_shadow` schema inside your real database, clones the table structure from the `public` schema, and generates synthetic data using the configured LLM.
 
 ```bash
-autodb up [--rows N] [--seed N]
+gendb up [--rows N] [--seed N]
 ```
 
 ### Flags
@@ -52,47 +52,47 @@ autodb up [--rows N] [--seed N]
 ### Example
 
 ```bash
-# Use defaults from autodb.yaml
-autodb up
+# Use defaults from gendb.yaml
+gendb up
 
 # Generate 500 rows per table with a specific seed
-autodb up --rows 500 --seed 12345
+gendb up --rows 500 --seed 12345
 ```
 
 ---
 
-## `autodb down`
+## `gendb down`
 
 No-op — the shadow schema persists inside your database automatically.
 
-The shadow schema lives in the same database as your real data and doesn't need to be "stopped". To remove it, use `autodb destroy`.
+The shadow schema lives in the same database as your real data and doesn't need to be "stopped". To remove it, use `gendb destroy`.
 
 ```bash
-autodb down
+gendb down
 ```
 
 ---
 
-## `autodb destroy`
+## `gendb destroy`
 
 Drop the shadow schema and all its data.
 
-Drops the `autodb_shadow` schema and all tables within it using `CASCADE`.
+Drops the `gendb_shadow` schema and all tables within it using `CASCADE`.
 
 ```bash
-autodb destroy
+gendb destroy
 ```
 
 ---
 
-## `autodb generate`
+## `gendb generate`
 
 Generate synthetic data (without truncating existing data).
 
-Appends new synthetic rows to the shadow schema tables. Requires the shadow schema to exist (`autodb up`).
+Appends new synthetic rows to the shadow schema tables. Requires the shadow schema to exist (`gendb up`).
 
 ```bash
-autodb generate [--rows N] [--seed N]
+gendb generate [--rows N] [--seed N]
 ```
 
 ### Flags
@@ -106,22 +106,22 @@ autodb generate [--rows N] [--seed N]
 
 ```bash
 # Add another batch of rows
-autodb generate
+gendb generate
 
 # Add 200 more rows
-autodb generate --rows 200
+gendb generate --rows 200
 ```
 
 ---
 
-## `autodb reset`
+## `gendb reset`
 
 Truncate and regenerate all synthetic data.
 
 Truncates all tables in the shadow schema, then regenerates fresh data. Requires the shadow schema to exist.
 
 ```bash
-autodb reset [--rows N] [--seed N]
+gendb reset [--rows N] [--seed N]
 ```
 
 ### Flags
@@ -135,55 +135,55 @@ autodb reset [--rows N] [--seed N]
 
 ```bash
 # Regenerate with defaults
-autodb reset
+gendb reset
 
 # Regenerate with a specific seed for reproducibility
-autodb reset --seed 42
+gendb reset --seed 42
 ```
 
 ---
 
-## `autodb sync`
+## `gendb sync`
 
 Re-introspect real DB and apply schema changes to shadow.
 
-Drops the shadow schema, re-creates it, fetches the latest schema from the real database, and applies the reconstructed DDL. Data is not regenerated — run `autodb reset` after syncing.
+Drops the shadow schema, re-creates it, fetches the latest schema from the real database, and applies the reconstructed DDL. Data is not regenerated — run `gendb reset` after syncing.
 
 ```bash
-autodb sync
+gendb sync
 ```
 
 ---
 
-## `autodb status`
+## `gendb status`
 
 Show connection status and shadow schema state.
 
 Displays the real database URL, shadow schema name, LLM provider/model, and whether the shadow schema exists.
 
 ```bash
-autodb status
+gendb status
 ```
 
 ### Example output
 
 ```
 Real DB:       postgres://user:pass@localhost:5432/mydb
-Shadow schema: autodb_shadow
+Shadow schema: gendb_shadow
 LLM:           ollama/llama3.2
-Shadow DB:     active (schema autodb_shadow exists)
+Shadow DB:     active (schema gendb_shadow exists)
 ```
 
 ---
 
-## `autodb proxy`
+## `gendb proxy`
 
 Start the PostgreSQL wire protocol proxy.
 
-Listens for PostgreSQL connections and routes them to the real database. AUTODB SQL commands are intercepted and executed by the proxy.
+Listens for PostgreSQL connections and routes them to the real database. GENDB SQL commands are intercepted and executed by the proxy.
 
 ```bash
-autodb proxy [--port N]
+gendb proxy [--port N]
 ```
 
 ### Flags
@@ -196,8 +196,8 @@ autodb proxy [--port N]
 
 ```bash
 # Start on default port
-autodb proxy
+gendb proxy
 
 # Start on a custom port
-autodb proxy --port 6000
+gendb proxy --port 6000
 ```

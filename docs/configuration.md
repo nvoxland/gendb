@@ -1,12 +1,12 @@
 # Configuration
 
-AutoDB is configured via `autodb.yaml`.
+GenDB is configured via `gendb.yaml`.
 
 ## Precedence
 
 Settings are applied in this order (highest priority first):
 
-1. **`autodb.yaml`** — file-based configuration
+1. **`gendb.yaml`** — file-based configuration
 2. **LLM recommendations** — the generation plan produced by schema analysis
 3. **Type-based defaults** — fallback generators based on column data type
 

@@ -1,14 +1,14 @@
 # LLM Setup
 
-AutoDB uses an LLM to analyze your database schema and produce a generation plan — a mapping of each column to an appropriate data generator. This page covers how to configure different LLM providers.
+GenDB uses an LLM to analyze your database schema and produce a generation plan — a mapping of each column to an appropriate data generator. This page covers how to configure different LLM providers.
 
-## How AutoDB Uses LLMs
+## How GenDB Uses LLMs
 
 Generation happens in two phases:
 
-1. **Schema analysis** — AutoDB sends your schema (table names, column names, data types, constraints) to the LLM. The LLM returns a JSON generation plan mapping each column to a [generator](generators.md) based on semantic understanding of column names and types.
+1. **Schema analysis** — GenDB sends your schema (table names, column names, data types, constraints) to the LLM. The LLM returns a JSON generation plan mapping each column to a [generator](generators.md) based on semantic understanding of column names and types.
 
-2. **Data generation** — AutoDB executes the plan using fast, local generators (powered by [gofakeit](https://github.com/brianvoe/gofakeit)). The LLM is **not** called per-row — it only chooses the generators.
+2. **Data generation** — GenDB executes the plan using fast, local generators (powered by [gofakeit](https://github.com/brianvoe/gofakeit)). The LLM is **not** called per-row — it only chooses the generators.
 
 The exception is columns configured with `generator: llm`, which call the LLM to generate each value individually. See [Direct LLM Generation](#direct-llm-generation) below.
 
@@ -26,7 +26,7 @@ Ollama is the default provider and runs entirely on your machine.
     ollama pull llama3.2
     ```
 
-3. AutoDB uses Ollama by default — no configuration changes needed:
+3. GenDB uses Ollama by default — no configuration changes needed:
 
     ```yaml
     llm:
@@ -41,7 +41,7 @@ Ollama is the default provider and runs entirely on your machine.
 
 1. Get an API key from [platform.openai.com](https://platform.openai.com)
 
-2. Configure in `autodb.yaml`:
+2. Configure in `gendb.yaml`:
 
     ```yaml
     llm:

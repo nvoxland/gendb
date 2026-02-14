@@ -1,17 +1,17 @@
 # Proxy
 
-The AutoDB proxy is a PostgreSQL wire protocol relay that sits between your application and your database. It intercepts AUTODB SQL commands and uses temporary views to route queries to real or generated data per table.
+The GenDB proxy is a PostgreSQL wire protocol relay that sits between your application and your database. It intercepts GENDB SQL commands and uses temporary views to route queries to real or generated data per table.
 
 ## What the Proxy Does
 
 - **Byte-level relay** — Standard SQL queries are forwarded as raw bytes with no parsing or modification
-- **AUTODB command interception** — Queries starting with `CALL autodb.` are intercepted, parsed, and executed locally by the proxy
+- **GENDB command interception** — Queries starting with `CALL gendb.` are intercepted, parsed, and executed locally by the proxy
 - **Per-table routing via temp views** — `return_generated` creates a temporary view that shadows the real table; `return_actual` drops it to restore real data access
 
 ## Starting the Proxy
 
 ```bash
-autodb serve --port 5433
+gendb serve --port 5433
 ```
 
 ## Connecting Through the Proxy
@@ -26,17 +26,17 @@ From your application, change only the host and port in the connection string to
 
 ## Generating Data and Routing
 
-Once connected through the proxy, use AUTODB SQL commands:
+Once connected through the proxy, use GENDB SQL commands:
 
 ```sql
 -- Generate synthetic data
-CALL autodb.generate_data(table_name => 'users', rows => 500);
+CALL gendb.generate_data(table_name => 'users', rows => 500);
 
 -- Route queries for "users" to generated data
-CALL autodb.return_generated(table_name => 'users');
+CALL gendb.return_generated(table_name => 'users');
 
 -- Switch back to real data
-CALL autodb.return_actual(table_name => 'users');
+CALL gendb.return_actual(table_name => 'users');
 ```
 
 ## How Routing Works
@@ -53,7 +53,7 @@ This approach means:
 
 ## How Standard SQL Passes Through
 
-The proxy does **not** parse standard SQL. When a query does not start with `CALL autodb.` (case-insensitive), the raw bytes are forwarded to the database and the response is relayed back. This means:
+The proxy does **not** parse standard SQL. When a query does not start with `CALL gendb.` (case-insensitive), the raw bytes are forwarded to the database and the response is relayed back. This means:
 
 - No SQL compatibility issues — any valid PostgreSQL query works
 - No performance overhead from SQL parsing

@@ -1,6 +1,6 @@
 # Data Generators
 
-AutoDB uses generators to produce synthetic values for each column. The LLM analyzes your schema and assigns generators automatically, but you can override any assignment via [configuration](configuration.md) or [AUTODB SQL](autodb-sql.md).
+GenDB uses generators to produce synthetic values for each column. The LLM analyzes your schema and assigns generators automatically, but you can override any assignment via [configuration](configuration.md) or [GENDB SQL](gendb-sql.md).
 
 ## Built-in Generators
 
@@ -117,7 +117,7 @@ Patterns use glob-style matching:
 
 ## Type-Based Fallback
 
-When no generator is assigned (by the LLM, config, or column rules), AutoDB falls back to generating values based on the PostgreSQL column type:
+When no generator is assigned (by the LLM, config, or column rules), GenDB falls back to generating values based on the PostgreSQL column type:
 
 | Column type | Generated value |
 |-------------|----------------|
@@ -134,7 +134,7 @@ When no generator is assigned (by the LLM, config, or column rules), AutoDB fall
 
 ## Foreign Key Resolution
 
-AutoDB automatically resolves foreign key relationships:
+GenDB automatically resolves foreign key relationships:
 
 - Tables are generated in **topological order** — referenced tables first, then dependent tables
 - FK columns are populated by randomly selecting from the referenced table's already-generated primary key values
@@ -142,7 +142,7 @@ AutoDB automatically resolves foreign key relationships:
 
 ## UNIQUE Constraint Handling
 
-For columns with UNIQUE constraints, AutoDB retries value generation up to **100 times** per row to find a unique value. If a unique value cannot be generated after 100 attempts, generation fails with an error.
+For columns with UNIQUE constraints, GenDB retries value generation up to **100 times** per row to find a unique value. If a unique value cannot be generated after 100 attempts, generation fails with an error.
 
 !!! tip
     If you hit uniqueness errors, try using generators with a larger value space (e.g., `uuid` instead of `number.int` with a small range), or reduce the row count for that table.
