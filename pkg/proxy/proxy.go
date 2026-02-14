@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,13 +15,14 @@ import (
 
 // Proxy is a PostgreSQL wire protocol proxy.
 type Proxy struct {
-	listenAddr string
-	realAddr   string
-	executor   *lang.Executor
-	listener   net.Listener
-	ready      chan struct{}
-	mu         sync.Mutex
-	sessions   map[net.Conn]*session
+	listenAddr  string
+	realAddr    string
+	executor    *lang.Executor
+	listener    net.Listener
+	ready       chan struct{}
+	mu          sync.Mutex
+	sessions    map[net.Conn]*session
+	schemaReady atomic.Bool
 }
 
 type session struct {
@@ -171,6 +173,15 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	if err := p.relayUntilReady(clientBackend, clientConn, backendConn, sess); err != nil {
 		fmt.Printf("Error during auth relay: %v\n", err)
 		return
+	}
+
+	// On first successful connection, create stub procedures for intellisense
+	if !p.schemaReady.Load() {
+		if err := ensureGenDBSchema(backendConn); err != nil {
+			fmt.Printf("Warning: could not create gendb procedure stubs: %v\n", err)
+		} else {
+			p.schemaReady.Store(true)
+		}
 	}
 
 	// Main loop: intercept GENDB commands, relay everything else
