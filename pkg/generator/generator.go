@@ -17,10 +17,11 @@ import (
 
 // Generator produces synthetic data for a schema.
 type Generator struct {
-	llmClient    *llm.Client
-	cfg          config.GenerationConfig
-	faker        *gofakeit.Faker
-	targetSchema string
+	llmClient       *llm.Client
+	cfg             config.GenerationConfig
+	faker           *gofakeit.Faker
+	targetSchema    string
+	tableNameMapper func(string) string
 }
 
 // Option configures a Generator.
@@ -30,6 +31,13 @@ type Option func(*Generator)
 func WithTargetSchema(schema string) Option {
 	return func(g *Generator) {
 		g.targetSchema = schema
+	}
+}
+
+// WithTableNameMapper sets a function that maps original table names to target table names.
+func WithTableNameMapper(mapper func(string) string) Option {
+	return func(g *Generator) {
+		g.tableNameMapper = mapper
 	}
 }
 
@@ -465,9 +473,13 @@ func (g *Generator) insertRows(ctx context.Context, conn *pgx.Conn, table *schem
 		copyRows[i] = vals
 	}
 
-	tableIdent := pgx.Identifier{table.Name}
+	tableName := table.Name
+	if g.tableNameMapper != nil {
+		tableName = g.tableNameMapper(table.Name)
+	}
+	tableIdent := pgx.Identifier{tableName}
 	if g.targetSchema != "" {
-		tableIdent = pgx.Identifier{g.targetSchema, table.Name}
+		tableIdent = pgx.Identifier{g.targetSchema, tableName}
 	}
 
 	copyCount, err := conn.CopyFrom(

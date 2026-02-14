@@ -14,9 +14,9 @@ type Result struct {
 
 // Executor runs parsed GENDB commands.
 type Executor struct {
-	OnGenerate        func(ctx context.Context, table string, rows int, seed *int64) error
-	OnReturnGenerated func(ctx context.Context, table string) error
-	OnReturnActual    func(ctx context.Context, table string) error
+	OnGenerate        func(ctx context.Context, table string, rows int, seed *int64, scenario string) error
+	OnReturnGenerated func(ctx context.Context, table string, scenario string) error
+	OnReturnActual    func(ctx context.Context, table string, scenario string) error
 }
 
 // NewExecutor creates a new command executor.
@@ -43,7 +43,7 @@ func (e *Executor) execGenerate(ctx context.Context, cmd *GenerateCommand) (*Res
 		return nil, fmt.Errorf("generate not configured")
 	}
 
-	if err := e.OnGenerate(ctx, cmd.Table, cmd.Rows, cmd.Seed); err != nil {
+	if err := e.OnGenerate(ctx, cmd.Table, cmd.Rows, cmd.Seed, cmd.Scenario); err != nil {
 		return nil, err
 	}
 
@@ -57,7 +57,7 @@ func (e *Executor) execReturnGenerated(ctx context.Context, cmd *ReturnGenerated
 	if e.OnReturnGenerated == nil {
 		return nil, fmt.Errorf("return_generated not configured")
 	}
-	if err := e.OnReturnGenerated(ctx, cmd.Table); err != nil {
+	if err := e.OnReturnGenerated(ctx, cmd.Table, cmd.Scenario); err != nil {
 		return nil, err
 	}
 	return &Result{Tag: fmt.Sprintf("GENDB RETURN GENERATED %s", cmd.Table)}, nil
@@ -67,7 +67,7 @@ func (e *Executor) execReturnActual(ctx context.Context, cmd *ReturnActualComman
 	if e.OnReturnActual == nil {
 		return nil, fmt.Errorf("return_actual not configured")
 	}
-	if err := e.OnReturnActual(ctx, cmd.Table); err != nil {
+	if err := e.OnReturnActual(ctx, cmd.Table, cmd.Scenario); err != nil {
 		return nil, err
 	}
 	return &Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", cmd.Table)}, nil

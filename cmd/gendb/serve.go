@@ -27,14 +27,12 @@ var (
 	dbHostname string
 	dbPort     int
 	servePort  int
-	key        string
 )
 
 func init() {
 	serveCmd.Flags().StringVar(&dbHostname, "db-hostname", "localhost", "PostgreSQL server hostname")
 	serveCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL server port")
 	serveCmd.Flags().IntVar(&servePort, "port", 5433, "Proxy listen port")
-	serveCmd.Flags().StringVar(&key, "key", "gendb", "Key for shadow schema naming: {source_schema}_{key}")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -44,7 +42,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	executor := lang.NewExecutor()
 
 	// Wire up OnGenerate callback
-	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64) error {
+	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64, scenario string) error {
 		conn := proxy.ConnFromContext(ctx)
 		if conn == nil {
 			return fmt.Errorf("no database connection available")
@@ -58,25 +56,27 @@ func runServe(cmd *cobra.Command, args []string) error {
 		if table != "" {
 			sg, err = inspector.InspectTable(ctx, table)
 		} else {
-			// Exclude shadow schemas when inspecting all tables
+			// Exclude the gendb schema when inspecting all tables
 			sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
-				ExcludeSchemas: []string{shadow.DeriveSchemaName("public", key)},
+				ExcludeSchemas: []string{shadow.SchemaName},
 			})
 		}
 		if err != nil {
 			return fmt.Errorf("inspecting schema: %w", err)
 		}
 
-		// For each table, create the shadow schema + table and generate data
+		// For each table, create the shadow table in the gendb schema and generate data
 		for _, t := range sg.Tables {
-			targetSchema := shadow.DeriveSchemaName(t.Schema, key)
+			mapper := func(name string) string {
+				return shadow.ShadowTableName(scenario, t.Schema, name)
+			}
 
 			// Build and execute DDL for this single table
 			singleTableGraph := &schema.SchemaGraph{}
 			singleTableGraph.SetTables([]*schema.Table{t})
-			ddl := schema.ReconstructDDLForSchema(singleTableGraph, targetSchema)
+			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
 			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return fmt.Errorf("creating shadow table %s.%s: %w", targetSchema, t.Name, err)
+				return fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, t.Schema, t.Name), err)
 			}
 
 			// Build generator config
@@ -91,7 +91,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 				genCfg.Seed = *seed
 			}
 
-			gen := generator.New(nil, genCfg, generator.WithTargetSchema(targetSchema))
+			gen := generator.New(nil, genCfg,
+				generator.WithTargetSchema(shadow.SchemaName),
+				generator.WithTableNameMapper(mapper),
+			)
 			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
 				return fmt.Errorf("generating data for %s: %w", t.Name, err)
 			}
@@ -101,22 +104,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Wire up OnReturnGenerated callback
-	executor.OnReturnGenerated = func(ctx context.Context, table string) error {
+	executor.OnReturnGenerated = func(ctx context.Context, table string, scenario string) error {
 		conn := proxy.ConnFromContext(ctx)
 		if conn == nil {
 			return fmt.Errorf("no database connection available")
 		}
-		shadowSchema := shadow.DeriveSchemaName("public", key)
+		shadowTable := shadow.ShadowTableName(scenario, "public", table)
 		_, err := conn.Exec(ctx, fmt.Sprintf(
 			"CREATE OR REPLACE TEMP VIEW %s AS SELECT * FROM %s",
 			pgx.Identifier{table}.Sanitize(),
-			pgx.Identifier{shadowSchema, table}.Sanitize(),
+			pgx.Identifier{shadow.SchemaName, shadowTable}.Sanitize(),
 		))
 		return err
 	}
 
 	// Wire up OnReturnActual callback
-	executor.OnReturnActual = func(ctx context.Context, table string) error {
+	executor.OnReturnActual = func(ctx context.Context, table string, scenario string) error {
 		conn := proxy.ConnFromContext(ctx)
 		if conn == nil {
 			return fmt.Errorf("no database connection available")
@@ -131,7 +134,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	p := proxy.New(proxy.Config{
 		ListenAddr: fmt.Sprintf(":%d", servePort),
 		RealAddr:   realAddr,
-		Key:        key,
 	}, executor)
 
 	ctx, cancel := context.WithCancel(context.Background())

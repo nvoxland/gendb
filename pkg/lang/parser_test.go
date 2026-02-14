@@ -199,6 +199,58 @@ func TestParseReturnActualCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestParseGenerateDataWithScenario(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 100, scenario => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Generate == nil {
+		t.Fatal("expected Generate command")
+	}
+	if cmd.Generate.Scenario != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Generate.Scenario)
+	}
+}
+
+func TestParseGenerateDataWithoutScenario(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 100)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Generate == nil {
+		t.Fatal("expected Generate command")
+	}
+	if cmd.Generate.Scenario != "" {
+		t.Errorf("got scenario %q, want empty", cmd.Generate.Scenario)
+	}
+}
+
+func TestParseReturnGeneratedWithScenario(t *testing.T) {
+	cmd, err := Parse("CALL gendb.return_generated(table_name => 'users', scenario => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnGenerated == nil {
+		t.Fatal("expected ReturnGenerated command")
+	}
+	if cmd.ReturnGenerated.Scenario != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.ReturnGenerated.Scenario)
+	}
+}
+
+func TestParseReturnActualWithScenario(t *testing.T) {
+	cmd, err := Parse("CALL gendb.return_actual(table_name => 'users', scenario => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ReturnActual == nil {
+		t.Fatal("expected ReturnActual command")
+	}
+	if cmd.ReturnActual.Scenario != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.ReturnActual.Scenario)
+	}
+}
+
 func TestParseRegenerateTable(t *testing.T) {
 	cmd, err := Parse("CALL gendb.regenerate_data(table_name => 'users', rows => 200)")
 	if err != nil {

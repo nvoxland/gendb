@@ -256,7 +256,6 @@ func TestProxyE2E(t *testing.T) {
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-		Key:        "gendb",
 	}, executor)
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
@@ -348,12 +347,10 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	pgAddr := startPostgresContainer(t)
 	ctx := context.Background()
 
-	const testKey = "gendb"
-
 	executor := lang.NewExecutor()
 
 	// Wire up OnGenerate the same way serve.go does.
-	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64) error {
+	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64, scenario string) error {
 		conn := ConnFromContext(ctx)
 		if conn == nil {
 			return fmt.Errorf("no database connection available")
@@ -367,7 +364,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 			sg, err = inspector.InspectTable(ctx, table)
 		} else {
 			sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
-				ExcludeSchemas: []string{shadow.DeriveSchemaName("public", testKey)},
+				ExcludeSchemas: []string{shadow.SchemaName},
 			})
 		}
 		if err != nil {
@@ -375,12 +372,15 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 		}
 
 		for _, tbl := range sg.Tables {
-			targetSchema := shadow.DeriveSchemaName(tbl.Schema, testKey)
+			mapper := func(name string) string {
+				return shadow.ShadowTableName(scenario, tbl.Schema, name)
+			}
+
 			singleTableGraph := &schema.SchemaGraph{}
 			singleTableGraph.SetTables([]*schema.Table{tbl})
-			ddl := schema.ReconstructDDLForSchema(singleTableGraph, targetSchema)
+			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
 			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return fmt.Errorf("creating shadow table %s.%s: %w", targetSchema, tbl.Name, err)
+				return fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, tbl.Schema, tbl.Name), err)
 			}
 
 			genCfg := config.GenerationConfig{
@@ -394,7 +394,10 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 				genCfg.Seed = *seed
 			}
 
-			gen := generator.New(nil, genCfg, generator.WithTargetSchema(targetSchema))
+			gen := generator.New(nil, genCfg,
+				generator.WithTargetSchema(shadow.SchemaName),
+				generator.WithTableNameMapper(mapper),
+			)
 			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
 				return fmt.Errorf("generating data for %s: %w", tbl.Name, err)
 			}
@@ -405,7 +408,6 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-		Key:        testKey,
 	}, executor)
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
@@ -451,10 +453,11 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 		t.Fatalf("generate_data: %v", err)
 	}
 
-	// Verify rows were inserted in the shadow schema.
-	shadowSchema := shadow.DeriveSchemaName("public", testKey)
+	// Verify rows were inserted in the shadow table with the new naming convention.
+	shadowTable := shadow.ShadowTableName("", "public", "test1")
 	var count int
-	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.test1", shadowSchema)).Scan(&count)
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s",
+		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&count)
 	if err != nil {
 		t.Fatalf("counting rows in shadow table: %v", err)
 	}
@@ -463,7 +466,8 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	}
 
 	// Verify all values respect varchar constraints.
-	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT name, address, city, state, zip FROM %s.test1", shadowSchema))
+	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT name, address, city, state, zip FROM %s.%s",
+		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize()))
 	if err != nil {
 		t.Fatalf("querying shadow table: %v", err)
 	}

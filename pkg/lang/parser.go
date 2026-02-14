@@ -143,6 +143,9 @@ func buildGenerateData(args map[string]string) (*Command, error) {
 		}
 		cmd.Seed = &n
 	}
+	if sc, ok := args["scenario"]; ok {
+		cmd.Scenario = sc
+	}
 	return &Command{Generate: cmd}, nil
 }
 
@@ -155,7 +158,11 @@ func buildReturnGenerated(args map[string]string) (*Command, error) {
 	if !ok {
 		return nil, fmt.Errorf("parse error: return_generated() requires 'table_name' argument")
 	}
-	return &Command{ReturnGenerated: &ReturnGeneratedCommand{Table: table}}, nil
+	cmd := &ReturnGeneratedCommand{Table: table}
+	if sc, ok := args["scenario"]; ok {
+		cmd.Scenario = sc
+	}
+	return &Command{ReturnGenerated: cmd}, nil
 }
 
 func buildReturnActual(args map[string]string) (*Command, error) {
@@ -163,5 +170,9 @@ func buildReturnActual(args map[string]string) (*Command, error) {
 	if !ok {
 		return nil, fmt.Errorf("parse error: return_actual() requires 'table_name' argument")
 	}
-	return &Command{ReturnActual: &ReturnActualCommand{Table: table}}, nil
+	cmd := &ReturnActualCommand{Table: table}
+	if sc, ok := args["scenario"]; ok {
+		cmd.Scenario = sc
+	}
+	return &Command{ReturnActual: cmd}, nil
 }

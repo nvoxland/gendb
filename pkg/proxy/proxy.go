@@ -46,7 +46,6 @@ type session struct {
 type Config struct {
 	ListenAddr string // e.g. ":5433"
 	RealAddr   string // e.g. "localhost:5432"
-	Key        string // e.g. "gendb" — shadow schema is derived as {source_schema}_{key}
 }
 
 // New creates a new proxy.

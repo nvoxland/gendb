@@ -7,19 +7,22 @@ type Command struct {
 	ReturnActual    *ReturnActualCommand
 }
 
-// GenerateCommand: CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42)
+// GenerateCommand: CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42, scenario => 'edge')
 type GenerateCommand struct {
-	Table string
-	Rows  int
-	Seed  *int64
+	Table    string
+	Rows     int
+	Seed     *int64
+	Scenario string
 }
 
-// ReturnGeneratedCommand: CALL gendb.return_generated(table_name => 'users')
+// ReturnGeneratedCommand: CALL gendb.return_generated(table_name => 'users', scenario => 'edge')
 type ReturnGeneratedCommand struct {
-	Table string
+	Table    string
+	Scenario string
 }
 
-// ReturnActualCommand: CALL gendb.return_actual(table_name => 'users')
+// ReturnActualCommand: CALL gendb.return_actual(table_name => 'users', scenario => 'edge')
 type ReturnActualCommand struct {
-	Table string
+	Table    string
+	Scenario string
 }
