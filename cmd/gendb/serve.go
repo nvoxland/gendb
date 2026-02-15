@@ -33,6 +33,7 @@ var (
 	dbHostname string
 	dbPort     int
 	servePort  int
+	logLevel   string
 )
 
 // Package-level variables for config and LLM client, set at startup.
@@ -45,6 +46,7 @@ func init() {
 	serveCmd.Flags().StringVar(&dbHostname, "db-hostname", "localhost", "PostgreSQL server hostname")
 	serveCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL server port")
 	serveCmd.Flags().IntVar(&servePort, "port", 5433, "Proxy listen port")
+	serveCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error (overrides config file)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -55,6 +57,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	appConfig = cfg
+
+	// Configure logging: CLI flag overrides config file
+	level := cfg.LogLevel
+	if logLevel != "" {
+		level = logLevel
+	}
+	initLogging(level)
 
 	// Create LLM client
 	appLLMClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKey)
@@ -84,6 +93,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}()
 
 	return p.Start(ctx)
+}
+
+func initLogging(level string) {
+	var slogLevel slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel})
+	slog.SetDefault(slog.New(handler))
 }
 
 // connectToDB creates an independent *pgx.Conn by dialing the real database directly.

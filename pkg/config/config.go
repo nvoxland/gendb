@@ -27,6 +27,7 @@ func Load(path string) (*Config, error) {
 
 // Config holds the GenDB configuration.
 type Config struct {
+	LogLevel   string           `yaml:"log_level"`
 	LLM        LLMConfig        `yaml:"llm"`
 	Generation GenerationConfig `yaml:"generation"`
 }
@@ -67,6 +68,7 @@ type ColumnRule struct {
 
 func DefaultConfig() *Config {
 	return &Config{
+		LogLevel: "info",
 		LLM: LLMConfig{
 			Provider: "ollama",
 			Model:    "llama3.2",
