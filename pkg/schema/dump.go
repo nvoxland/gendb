@@ -105,7 +105,7 @@ func ReconstructDDLForSchemaWithMapping(sg *SchemaGraph, targetSchema string, ma
 		mappedName := mapName(t.Name)
 		for _, idx := range t.Indexes {
 			qualifiedTable := quoteIdent(targetSchema) + "." + quoteIdent(mappedName)
-			qualifiedIdx := quoteIdent(targetSchema + "_" + idx.Name)
+			qualifiedIdx := quoteIdent(mapName(idx.Name))
 			cols := make([]string, len(idx.Columns))
 			for i, c := range idx.Columns {
 				cols[i] = quoteIdent(c)

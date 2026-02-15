@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"sort"
+
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/generator"
 	"github.com/nvoxland/gendb/pkg/lang"
@@ -413,12 +415,62 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 				}
 			}
 		}
+
+		// --- Index sync ---
+		origIndexes := make(map[string]*schema.Index)
+		for _, idx := range origTable.Indexes {
+			origIndexes[indexSignature(idx)] = idx
+		}
+		shadowIndexes := make(map[string]*schema.Index)
+		for _, idx := range shadowTable.Indexes {
+			shadowIndexes[indexSignature(idx)] = idx
+		}
+
+		// Drop shadow indexes whose signature no longer exists in the original
+		for sig, idx := range shadowIndexes {
+			if _, exists := origIndexes[sig]; !exists {
+				slog.Info("Dropping removed index from shadow table", "index", idx.Name, "shadow_table", shadowName)
+				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP INDEX %s.%s",
+					pgx.Identifier{shadow.SchemaName}.Sanitize(), pgx.Identifier{idx.Name}.Sanitize())); err != nil {
+					return nil, fmt.Errorf("dropping index %s from %s: %w", idx.Name, shadowName, err)
+				}
+			}
+		}
+
+		// Create indexes present on original but missing from shadow
+		for _, idx := range origIndexes {
+			if _, exists := shadowIndexes[indexSignature(idx)]; !exists {
+				idxName := shadow.ShadowTableName(sc, sourceSchema, idx.Name)
+				cols := make([]string, len(idx.Columns))
+				for i, c := range idx.Columns {
+					cols[i] = pgx.Identifier{c}.Sanitize()
+				}
+				unique := ""
+				if idx.IsUnique {
+					unique = "UNIQUE "
+				}
+				slog.Info("Creating new index on shadow table", "index", idxName, "shadow_table", shadowName)
+				if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)",
+					unique, pgx.Identifier{idxName}.Sanitize(), qualifiedShadow, strings.Join(cols, ", "))); err != nil {
+					return nil, fmt.Errorf("creating index %s on %s: %w", idxName, shadowName, err)
+				}
+			}
+		}
 	}
 
 	if table != "" {
 		return &lang.Result{Tag: fmt.Sprintf("GENDB SYNC %s", table)}, nil
 	}
 	return &lang.Result{Tag: "GENDB SYNC"}, nil
+}
+
+// indexSignature returns a canonical string for an index based on its functional
+// properties (columns and uniqueness), ignoring the name.
+func indexSignature(idx *schema.Index) string {
+	cols := make([]string, len(idx.Columns))
+	copy(cols, idx.Columns)
+	sort.Strings(cols)
+	return fmt.Sprintf("unique:%t|cols:%s", idx.IsUnique, strings.Join(cols, ","))
 }
 
 func handleReturnGenerated(ctx context.Context, args map[string]string) (*lang.Result, error) {
