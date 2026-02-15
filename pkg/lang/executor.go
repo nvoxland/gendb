@@ -17,6 +17,7 @@ type Executor struct {
 	OnGenerate        func(ctx context.Context, table string, rows int, seed *int64, scenario string) error
 	OnReturnGenerated func(ctx context.Context, table string, scenario string) error
 	OnReturnActual    func(ctx context.Context, table string, scenario string) error
+	OnSync            func(ctx context.Context, table string, scenario string) error
 }
 
 // NewExecutor creates a new command executor.
@@ -33,6 +34,8 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command) (*Result, error) {
 		return e.execReturnGenerated(ctx, cmd.ReturnGenerated)
 	case cmd.ReturnActual != nil:
 		return e.execReturnActual(ctx, cmd.ReturnActual)
+	case cmd.Sync != nil:
+		return e.execSync(ctx, cmd.Sync)
 	default:
 		return nil, fmt.Errorf("unrecognized GENDB command")
 	}
@@ -71,4 +74,17 @@ func (e *Executor) execReturnActual(ctx context.Context, cmd *ReturnActualComman
 		return nil, err
 	}
 	return &Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", cmd.Table)}, nil
+}
+
+func (e *Executor) execSync(ctx context.Context, cmd *SyncCommand) (*Result, error) {
+	if e.OnSync == nil {
+		return nil, fmt.Errorf("sync not configured")
+	}
+	if err := e.OnSync(ctx, cmd.Table, cmd.Scenario); err != nil {
+		return nil, err
+	}
+	if cmd.Table != "" {
+		return &Result{Tag: fmt.Sprintf("GENDB SYNC %s", cmd.Table)}, nil
+	}
+	return &Result{Tag: "GENDB SYNC"}, nil
 }

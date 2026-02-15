@@ -251,6 +251,70 @@ func TestParseReturnActualWithScenario(t *testing.T) {
 	}
 }
 
+func TestParseSyncNoArgs(t *testing.T) {
+	cmd, err := Parse("CALL gendb.sync()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Sync == nil {
+		t.Fatal("expected Sync command")
+	}
+	if cmd.Sync.Table != "" {
+		t.Errorf("expected empty table, got %q", cmd.Sync.Table)
+	}
+	if cmd.Sync.Scenario != "" {
+		t.Errorf("expected empty scenario, got %q", cmd.Sync.Scenario)
+	}
+}
+
+func TestParseSyncWithTable(t *testing.T) {
+	cmd, err := Parse("CALL gendb.sync(table_name => 'users')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Sync == nil {
+		t.Fatal("expected Sync command")
+	}
+	if cmd.Sync.Table != "users" {
+		t.Errorf("got table %q, want users", cmd.Sync.Table)
+	}
+	if cmd.Sync.Scenario != "" {
+		t.Errorf("expected empty scenario, got %q", cmd.Sync.Scenario)
+	}
+}
+
+func TestParseSyncWithScenario(t *testing.T) {
+	cmd, err := Parse("CALL gendb.sync(scenario => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Sync == nil {
+		t.Fatal("expected Sync command")
+	}
+	if cmd.Sync.Table != "" {
+		t.Errorf("expected empty table, got %q", cmd.Sync.Table)
+	}
+	if cmd.Sync.Scenario != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Sync.Scenario)
+	}
+}
+
+func TestParseSyncWithBoth(t *testing.T) {
+	cmd, err := Parse("CALL gendb.sync(table_name => 'users', scenario => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Sync == nil {
+		t.Fatal("expected Sync command")
+	}
+	if cmd.Sync.Table != "users" {
+		t.Errorf("got table %q, want users", cmd.Sync.Table)
+	}
+	if cmd.Sync.Scenario != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Sync.Scenario)
+	}
+}
+
 func TestParseRegenerateTable(t *testing.T) {
 	cmd, err := Parse("CALL gendb.regenerate_data(table_name => 'users', rows => 200)")
 	if err != nil {

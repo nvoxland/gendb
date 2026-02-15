@@ -542,6 +542,85 @@ func extractPKValues(table *schema.Table, rows []map[string]any) []map[string]an
 	return result
 }
 
+// FillColumn generates data for a single new column across existing rows.
+// It reads primary key values from the table, generates a value for each row,
+// and batch-updates them. If no primary key exists, it sets all rows to the same value.
+func (g *Generator) FillColumn(ctx context.Context, conn *pgx.Conn, qualifiedTable string, col *schema.Column, pkColumns []string) error {
+	val, err := g.generateByType(col)
+	if err != nil {
+		return fmt.Errorf("generating value for column %s: %w", col.Name, err)
+	}
+
+	if len(pkColumns) == 0 {
+		// No PK: set all rows to the same generated value
+		_, err := conn.Exec(ctx, fmt.Sprintf("UPDATE %s SET %s = $1",
+			qualifiedTable, pgx.Identifier{col.Name}.Sanitize()), val)
+		return err
+	}
+
+	// Build SELECT for PK columns
+	pkIdents := make([]string, len(pkColumns))
+	for i, pk := range pkColumns {
+		pkIdents[i] = pgx.Identifier{pk}.Sanitize()
+	}
+	selectSQL := fmt.Sprintf("SELECT %s FROM %s", strings.Join(pkIdents, ", "), qualifiedTable)
+	rows, err := conn.Query(ctx, selectSQL)
+	if err != nil {
+		return fmt.Errorf("reading primary keys: %w", err)
+	}
+	defer rows.Close()
+
+	type pkRow struct {
+		values []any
+	}
+	var pkRows []pkRow
+	for rows.Next() {
+		vals := make([]any, len(pkColumns))
+		ptrs := make([]any, len(pkColumns))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return fmt.Errorf("scanning primary key: %w", err)
+		}
+		pkRows = append(pkRows, pkRow{values: vals})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Build WHERE clause for PK
+	whereParts := make([]string, len(pkColumns))
+	for i, pk := range pkColumns {
+		whereParts[i] = fmt.Sprintf("%s = $%d", pgx.Identifier{pk}.Sanitize(), i+2)
+	}
+	updateSQL := fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s",
+		qualifiedTable, pgx.Identifier{col.Name}.Sanitize(), strings.Join(whereParts, " AND "))
+
+	// Batch update each row with a fresh generated value
+	batch := &pgx.Batch{}
+	for _, pk := range pkRows {
+		rowVal, err := g.generateByType(col)
+		if err != nil {
+			return fmt.Errorf("generating value for column %s: %w", col.Name, err)
+		}
+		args := make([]any, 0, 1+len(pk.values))
+		args = append(args, rowVal)
+		args = append(args, pk.values...)
+		batch.Queue(updateSQL, args...)
+	}
+
+	br := conn.SendBatch(ctx, batch)
+	defer br.Close()
+	for range pkRows {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("updating column %s: %w", col.Name, err)
+		}
+	}
+
+	return nil
+}
+
 func matchPattern(name, pattern string) bool {
 	// Simple glob matching: only supports * prefix/suffix
 	if pattern == "*" {

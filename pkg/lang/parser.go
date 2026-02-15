@@ -57,6 +57,8 @@ func Parse(input string) (*Command, error) {
 		return buildReturnGenerated(args)
 	case "return_actual":
 		return buildReturnActual(args)
+	case "sync":
+		return buildSync(args)
 	default:
 		return nil, fmt.Errorf("parse error: unknown procedure %q", procName)
 	}
@@ -163,6 +165,17 @@ func buildReturnGenerated(args map[string]string) (*Command, error) {
 		cmd.Scenario = sc
 	}
 	return &Command{ReturnGenerated: cmd}, nil
+}
+
+func buildSync(args map[string]string) (*Command, error) {
+	cmd := &SyncCommand{}
+	if t, ok := args["table_name"]; ok {
+		cmd.Table = t
+	}
+	if sc, ok := args["scenario"]; ok {
+		cmd.Scenario = sc
+	}
+	return &Command{Sync: cmd}, nil
 }
 
 func buildReturnActual(args map[string]string) (*Command, error) {

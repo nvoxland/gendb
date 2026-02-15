@@ -38,6 +38,13 @@ COMMENT ON PROCEDURE gendb.generate_data IS 'Generate synthetic data into the sh
 COMMENT ON PROCEDURE gendb.regenerate_data IS 'Alias for generate_data.';
 COMMENT ON PROCEDURE gendb.return_generated IS 'Route queries for a table to generated (shadow) data.';
 COMMENT ON PROCEDURE gendb.return_actual IS 'Restore a table to return real data.';
+
+CREATE OR REPLACE PROCEDURE gendb.sync(
+    table_name text DEFAULT NULL,
+    scenario text DEFAULT NULL
+) LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'This procedure is handled by the GenDB proxy. Connect through the proxy on port 5433.'; END; $$;
+
+COMMENT ON PROCEDURE gendb.sync IS 'Sync shadow table schemas with their original tables.';
 `
 
 // ensureGenDBSchema sends the setup SQL over a raw backend connection to create

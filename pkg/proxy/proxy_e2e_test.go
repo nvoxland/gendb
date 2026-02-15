@@ -498,3 +498,324 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 		t.Fatalf("iterating rows: %v", err)
 	}
 }
+
+func TestSyncE2E(t *testing.T) {
+	pgAddr := startPostgresContainer(t)
+	ctx := context.Background()
+
+	executor := lang.NewExecutor()
+
+	// Wire up OnGenerate (same as other E2E tests)
+	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64, scenario string) error {
+		conn := ConnFromContext(ctx)
+		if conn == nil {
+			return fmt.Errorf("no database connection available")
+		}
+
+		inspector := schema.NewInspectorFromConn(conn)
+
+		var err error
+		var sg *schema.SchemaGraph
+		if table != "" {
+			sg, err = inspector.InspectTable(ctx, table)
+		} else {
+			sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
+				ExcludeSchemas: []string{shadow.SchemaName},
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("inspecting schema: %w", err)
+		}
+
+		for _, tbl := range sg.Tables {
+			mapper := func(name string) string {
+				return shadow.ShadowTableName(scenario, tbl.Schema, name)
+			}
+
+			singleTableGraph := &schema.SchemaGraph{}
+			singleTableGraph.SetTables([]*schema.Table{tbl})
+			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
+			if _, err := conn.Exec(ctx, ddl); err != nil {
+				return fmt.Errorf("creating shadow table: %w", err)
+			}
+
+			genCfg := config.GenerationConfig{
+				DefaultRows: 10,
+				Seed:        42,
+			}
+			if rows > 0 {
+				genCfg.DefaultRows = rows
+			}
+			if seed != nil {
+				genCfg.Seed = *seed
+			}
+
+			gen := generator.New(nil, genCfg,
+				generator.WithTargetSchema(shadow.SchemaName),
+				generator.WithTableNameMapper(mapper),
+			)
+			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
+				return fmt.Errorf("generating data for %s: %w", tbl.Name, err)
+			}
+		}
+		return nil
+	}
+
+	// Wire up OnSync
+	executor.OnSync = func(ctx context.Context, table string, scenario string) error {
+		conn := ConnFromContext(ctx)
+		if conn == nil {
+			return fmt.Errorf("no database connection available")
+		}
+
+		inspector := schema.NewInspectorFromConn(conn)
+
+		rows, err := conn.Query(ctx, `
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+		`, shadow.SchemaName)
+		if err != nil {
+			return fmt.Errorf("listing shadow tables: %w", err)
+		}
+
+		var shadowNames []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			shadowNames = append(shadowNames, name)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		for _, shadowName := range shadowNames {
+			sc, _, sourceTable, ok := shadow.ParseShadowTableName(shadowName)
+			if !ok {
+				continue
+			}
+			if table != "" && sourceTable != table {
+				continue
+			}
+			if scenario != "" && sc != scenario {
+				continue
+			}
+
+			qualifiedShadow := fmt.Sprintf("%s.%s",
+				shadow.SchemaName, pgx.Identifier{shadowName}.Sanitize())
+
+			origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
+			if origErr != nil {
+				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
+					return err
+				}
+				continue
+			}
+
+			origTable := origGraph.Tables[0]
+
+			shadowGraph, err := inspector.InspectTable(ctx, shadowName)
+			if err != nil {
+				return err
+			}
+			shadowTable := shadowGraph.Tables[0]
+
+			origCols := make(map[string]*schema.Column)
+			for _, c := range origTable.Columns {
+				origCols[c.Name] = c
+			}
+			shadowCols := make(map[string]bool)
+			for _, c := range shadowTable.Columns {
+				shadowCols[c.Name] = true
+			}
+
+			for _, c := range shadowTable.Columns {
+				if _, exists := origCols[c.Name]; !exists {
+					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
+						qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
+						return err
+					}
+				}
+			}
+
+			for _, origCol := range origTable.Columns {
+				if shadowCols[origCol.Name] {
+					continue
+				}
+				if origCol.IsGenerated {
+					continue
+				}
+				if strings.Contains(origCol.DefaultValue, "nextval(") ||
+					strings.Contains(origCol.DefaultValue, "gen_random_uuid()") {
+					continue
+				}
+				if strings.Contains(strings.ToLower(origCol.DataType), "serial") {
+					continue
+				}
+
+				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
+					qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
+					return err
+				}
+
+				genCfg := config.GenerationConfig{DefaultRows: 100, Seed: 42}
+				gen := generator.New(nil, genCfg)
+				if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
+					return err
+				}
+
+				if !origCol.IsNullable {
+					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL",
+						qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	p := New(Config{
+		ListenAddr: ":0",
+		RealAddr:   pgAddr,
+	}, executor)
+
+	proxyCtx, proxyCancel := context.WithCancel(ctx)
+	defer proxyCancel()
+
+	proxyErr := make(chan error, 1)
+	go func() {
+		proxyErr <- p.Start(proxyCtx)
+	}()
+
+	select {
+	case <-p.Ready():
+	case err := <-proxyErr:
+		t.Fatalf("proxy failed to start: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for proxy to be ready")
+	}
+
+	proxyAddr := p.Addr().String()
+	connStr := fmt.Sprintf("postgres://postgres:testpass@%s/postgres?sslmode=disable", proxyAddr)
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("connecting through proxy: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	// Create test table
+	_, err = conn.Exec(ctx, `CREATE TABLE test1 (
+		id serial PRIMARY KEY,
+		name varchar(50),
+		email varchar(100)
+	)`)
+	if err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+
+	// Generate data
+	_, err = conn.Exec(ctx, "CALL gendb.generate_data(table_name => 'test1', rows => '5')")
+	if err != nil {
+		t.Fatalf("generate_data: %v", err)
+	}
+
+	shadowTable := shadow.ShadowTableName("", "public", "test1")
+
+	// Verify initial shadow table
+	var count int
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s",
+		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&count)
+	if err != nil {
+		t.Fatalf("counting initial rows: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 rows, got %d", count)
+	}
+
+	// Alter original: add column, drop column
+	_, err = conn.Exec(ctx, "ALTER TABLE test1 ADD COLUMN age integer")
+	if err != nil {
+		t.Fatalf("ALTER TABLE ADD COLUMN: %v", err)
+	}
+	_, err = conn.Exec(ctx, "ALTER TABLE test1 DROP COLUMN email")
+	if err != nil {
+		t.Fatalf("ALTER TABLE DROP COLUMN: %v", err)
+	}
+
+	// Run sync
+	_, err = conn.Exec(ctx, "CALL gendb.sync(table_name => 'test1')")
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	// Verify shadow table has 'age' column and no 'email' column
+	var hasAge, hasEmail bool
+	colRows, err := conn.Query(ctx, `
+		SELECT column_name FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = $2
+	`, shadow.SchemaName, shadowTable)
+	if err != nil {
+		t.Fatalf("querying shadow columns: %v", err)
+	}
+	for colRows.Next() {
+		var colName string
+		if err := colRows.Scan(&colName); err != nil {
+			t.Fatalf("scanning column: %v", err)
+		}
+		if colName == "age" {
+			hasAge = true
+		}
+		if colName == "email" {
+			hasEmail = true
+		}
+	}
+	colRows.Close()
+
+	if !hasAge {
+		t.Error("expected shadow table to have 'age' column after sync")
+	}
+	if hasEmail {
+		t.Error("expected shadow table NOT to have 'email' column after sync")
+	}
+
+	// Verify age column has data (not all nulls)
+	var nullCount int
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE age IS NULL",
+		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&nullCount)
+	if err != nil {
+		t.Fatalf("counting nulls: %v", err)
+	}
+	if nullCount == 5 {
+		t.Error("expected age column to have generated data, but all values are NULL")
+	}
+
+	// Drop original table and sync to clean up orphaned shadow table
+	_, err = conn.Exec(ctx, "DROP TABLE test1 CASCADE")
+	if err != nil {
+		t.Fatalf("DROP TABLE: %v", err)
+	}
+
+	_, err = conn.Exec(ctx, "CALL gendb.sync()")
+	if err != nil {
+		t.Fatalf("sync after drop: %v", err)
+	}
+
+	// Verify shadow table no longer exists
+	var tableExists bool
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = $1 AND table_name = $2
+		)
+	`, shadow.SchemaName, shadowTable).Scan(&tableExists)
+	if err != nil {
+		t.Fatalf("checking shadow table existence: %v", err)
+	}
+	if tableExists {
+		t.Error("expected shadow table to be dropped after original was dropped and sync was run")
+	}
+}

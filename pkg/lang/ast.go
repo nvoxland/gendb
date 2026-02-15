@@ -5,6 +5,7 @@ type Command struct {
 	Generate        *GenerateCommand
 	ReturnGenerated *ReturnGeneratedCommand
 	ReturnActual    *ReturnActualCommand
+	Sync            *SyncCommand
 }
 
 // GenerateCommand: CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42, scenario => 'edge')
@@ -25,4 +26,10 @@ type ReturnGeneratedCommand struct {
 type ReturnActualCommand struct {
 	Table    string
 	Scenario string
+}
+
+// SyncCommand: CALL gendb.sync(table_name => 'users', scenario => 'edge')
+type SyncCommand struct {
+	Table    string // optional: filter to specific table
+	Scenario string // optional: filter to specific scenario
 }

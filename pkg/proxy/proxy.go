@@ -292,7 +292,7 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 	defer sess.resumeRelay()
 
 	// If the command needs a DB connection, lazily create a *pgx.Conn and reuse it.
-	if cmd.Generate != nil || cmd.ReturnGenerated != nil || cmd.ReturnActual != nil {
+	if cmd.Generate != nil || cmd.ReturnGenerated != nil || cmd.ReturnActual != nil || cmd.Sync != nil {
 		if sess.pgxConn == nil {
 			pgxConn, err := p.createPgxConn(ctx, sess)
 			if err != nil {

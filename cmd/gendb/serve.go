@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/jackc/pgx/v5"
@@ -97,6 +98,144 @@ func runServe(cmd *cobra.Command, args []string) error {
 			)
 			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
 				return fmt.Errorf("generating data for %s: %w", t.Name, err)
+			}
+		}
+
+		return nil
+	}
+
+	// Wire up OnSync callback
+	executor.OnSync = func(ctx context.Context, table string, scenario string) error {
+		conn := proxy.ConnFromContext(ctx)
+		if conn == nil {
+			return fmt.Errorf("no database connection available")
+		}
+
+		inspector := schema.NewInspectorFromConn(conn)
+
+		// Step 1: List all shadow tables
+		rows, err := conn.Query(ctx, `
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+		`, shadow.SchemaName)
+		if err != nil {
+			return fmt.Errorf("listing shadow tables: %w", err)
+		}
+
+		var shadowNames []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning shadow table name: %w", err)
+			}
+			shadowNames = append(shadowNames, name)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		for _, shadowName := range shadowNames {
+			sc, sourceSchema, sourceTable, ok := shadow.ParseShadowTableName(shadowName)
+			if !ok {
+				continue
+			}
+
+			// Step 2: Filter by table and scenario
+			if table != "" && sourceTable != table {
+				continue
+			}
+			if scenario != "" && sc != scenario {
+				continue
+			}
+
+			qualifiedShadow := pgx.Identifier{shadow.SchemaName, shadowName}.Sanitize()
+
+			// Step 3: Check if original table still exists
+			origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
+			if origErr != nil {
+				// Original table missing — drop the shadow table
+				fmt.Printf("Dropping orphaned shadow table %s (original %s.%s not found)\n", shadowName, sourceSchema, sourceTable)
+				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
+					return fmt.Errorf("dropping orphaned shadow table %s: %w", shadowName, err)
+				}
+				continue
+			}
+
+			origTable := origGraph.Tables[0]
+
+			// Inspect the shadow table
+			shadowGraph, err := inspector.InspectTable(ctx, shadowName)
+			if err != nil {
+				return fmt.Errorf("inspecting shadow table %s: %w", shadowName, err)
+			}
+			shadowTable := shadowGraph.Tables[0]
+
+			// Build column sets
+			origCols := make(map[string]*schema.Column)
+			for _, c := range origTable.Columns {
+				origCols[c.Name] = c
+			}
+			shadowCols := make(map[string]bool)
+			for _, c := range shadowTable.Columns {
+				shadowCols[c.Name] = true
+			}
+
+			// Columns in shadow but NOT in original → DROP COLUMN
+			for _, c := range shadowTable.Columns {
+				if _, exists := origCols[c.Name]; !exists {
+					fmt.Printf("  Dropping column %s from %s\n", c.Name, shadowName)
+					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
+						qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
+						return fmt.Errorf("dropping column %s from %s: %w", c.Name, shadowName, err)
+					}
+				}
+			}
+
+			// Columns in original but NOT in shadow → ADD COLUMN + fill data
+			for _, origCol := range origTable.Columns {
+				if shadowCols[origCol.Name] {
+					continue
+				}
+
+				// Skip auto-generated columns
+				if origCol.IsGenerated {
+					continue
+				}
+				if strings.Contains(origCol.DefaultValue, "nextval(") ||
+					strings.Contains(origCol.DefaultValue, "gen_random_uuid()") {
+					continue
+				}
+				if strings.Contains(strings.ToLower(origCol.DataType), "serial") {
+					continue
+				}
+
+				fmt.Printf("  Adding column %s to %s\n", origCol.Name, shadowName)
+
+				// Add as nullable first so we can fill data
+				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
+					qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
+					return fmt.Errorf("adding column %s to %s: %w", origCol.Name, shadowName, err)
+				}
+
+				// Fill data for existing rows
+				genCfg := config.GenerationConfig{
+					DefaultRows: 100,
+					Seed:        42,
+				}
+				gen := generator.New(nil, genCfg)
+				if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
+					return fmt.Errorf("filling column %s in %s: %w", origCol.Name, shadowName, err)
+				}
+
+				// If original column is NOT NULL, set NOT NULL after filling
+				if !origCol.IsNullable {
+					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL",
+						qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
+						return fmt.Errorf("setting NOT NULL on %s.%s: %w", shadowName, origCol.Name, err)
+					}
+				}
 			}
 		}
 
