@@ -2,7 +2,6 @@ package lang
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -16,7 +15,7 @@ func IsGenDBCommand(sql string) bool {
 	return strings.EqualFold(sql[:len(prefix)], prefix)
 }
 
-// Parse parses a CALL gendb.xxx(...) command string into an AST.
+// Parse parses a CALL gendb.xxx(...) command string into a Command.
 func Parse(input string) (*Command, error) {
 	input = strings.TrimSpace(input)
 	input = strings.TrimSuffix(input, ";")
@@ -48,20 +47,48 @@ func Parse(input string) (*Command, error) {
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
 
-	switch procName {
-	case "generate_data":
-		return buildGenerateData(args)
-	case "regenerate_data":
-		return buildRegenerateData(args)
-	case "return_generated":
-		return buildReturnGenerated(args)
-	case "return_actual":
-		return buildReturnActual(args)
-	case "sync":
-		return buildSync(args)
-	default:
+	// Resolve alias
+	if canonical, ok := Aliases[procName]; ok {
+		procName = canonical
+	}
+
+	// Registry lookup
+	def, ok := Registry[procName]
+	if !ok {
 		return nil, fmt.Errorf("parse error: unknown procedure %q", procName)
 	}
+
+	// Validate args
+	if err := validateArgs(def, args); err != nil {
+		return nil, err
+	}
+
+	return &Command{Name: procName, Args: args}, nil
+}
+
+// validateArgs checks that all required params are present and no unknown params are given.
+func validateArgs(def *CommandDef, args map[string]string) error {
+	// Check for unknown params
+	known := make(map[string]bool, len(def.Params))
+	for _, p := range def.Params {
+		known[p.Name] = true
+	}
+	for k := range args {
+		if !known[k] {
+			return fmt.Errorf("parse error: unknown parameter %q for %s", k, def.Name)
+		}
+	}
+
+	// Check required params
+	for _, p := range def.Params {
+		if p.Required {
+			if _, ok := args[p.Name]; !ok {
+				return fmt.Errorf("parse error: %s() requires '%s' argument", def.Name, p.Name)
+			}
+		}
+	}
+
+	return nil
 }
 
 // parseCallArgs parses "key => value, key2 => value2" into a map.
@@ -124,68 +151,4 @@ func splitArgs(s string) []string {
 		parts = append(parts, current.String())
 	}
 	return parts
-}
-
-func buildGenerateData(args map[string]string) (*Command, error) {
-	cmd := &GenerateCommand{}
-	if t, ok := args["table_name"]; ok {
-		cmd.Table = t
-	}
-	if r, ok := args["rows"]; ok {
-		n, err := strconv.Atoi(r)
-		if err != nil {
-			return nil, fmt.Errorf("parse error: invalid rows value %q", r)
-		}
-		cmd.Rows = n
-	}
-	if s, ok := args["seed"]; ok {
-		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse error: invalid seed value %q", s)
-		}
-		cmd.Seed = &n
-	}
-	if sc, ok := args["scenario"]; ok {
-		cmd.Scenario = sc
-	}
-	return &Command{Generate: cmd}, nil
-}
-
-func buildRegenerateData(args map[string]string) (*Command, error) {
-	return buildGenerateData(args)
-}
-
-func buildReturnGenerated(args map[string]string) (*Command, error) {
-	table, ok := args["table_name"]
-	if !ok {
-		return nil, fmt.Errorf("parse error: return_generated() requires 'table_name' argument")
-	}
-	cmd := &ReturnGeneratedCommand{Table: table}
-	if sc, ok := args["scenario"]; ok {
-		cmd.Scenario = sc
-	}
-	return &Command{ReturnGenerated: cmd}, nil
-}
-
-func buildSync(args map[string]string) (*Command, error) {
-	cmd := &SyncCommand{}
-	if t, ok := args["table_name"]; ok {
-		cmd.Table = t
-	}
-	if sc, ok := args["scenario"]; ok {
-		cmd.Scenario = sc
-	}
-	return &Command{Sync: cmd}, nil
-}
-
-func buildReturnActual(args map[string]string) (*Command, error) {
-	table, ok := args["table_name"]
-	if !ok {
-		return nil, fmt.Errorf("parse error: return_actual() requires 'table_name' argument")
-	}
-	cmd := &ReturnActualCommand{Table: table}
-	if sc, ok := args["scenario"]; ok {
-		cmd.Scenario = sc
-	}
-	return &Command{ReturnActual: cmd}, nil
 }

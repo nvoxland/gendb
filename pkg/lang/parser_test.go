@@ -31,17 +31,17 @@ func TestParseGenerateTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
-	if cmd.Generate.Rows != 500 {
-		t.Errorf("got rows %d, want 500", cmd.Generate.Rows)
+	if cmd.Args["rows"] != "500" {
+		t.Errorf("got rows %q, want 500", cmd.Args["rows"])
 	}
-	if cmd.Generate.Seed != nil {
-		t.Errorf("expected nil seed, got %d", *cmd.Generate.Seed)
+	if _, ok := cmd.Args["seed"]; ok {
+		t.Errorf("expected no seed arg, got %q", cmd.Args["seed"])
 	}
 }
 
@@ -50,11 +50,11 @@ func TestParseGenerateTableWithSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Seed == nil || *cmd.Generate.Seed != 42 {
-		t.Errorf("expected seed 42, got %v", cmd.Generate.Seed)
+	if cmd.Args["seed"] != "42" {
+		t.Errorf("expected seed 42, got %q", cmd.Args["seed"])
 	}
 }
 
@@ -63,11 +63,11 @@ func TestParseGenerateAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "" {
-		t.Errorf("expected empty table for all-tables generate, got %q", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "" {
+		t.Errorf("expected empty table_name for all-tables generate, got %q", cmd.Args["table_name"])
 	}
 }
 
@@ -76,14 +76,14 @@ func TestParseGenerateDataNoRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
-	if cmd.Generate.Rows != 0 {
-		t.Errorf("expected rows 0 (default), got %d", cmd.Generate.Rows)
+	if _, ok := cmd.Args["rows"]; ok {
+		t.Errorf("expected no rows arg, got %q", cmd.Args["rows"])
 	}
 }
 
@@ -92,7 +92,7 @@ func TestParseSemicolon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil || cmd.Generate.Table != "users" {
+	if cmd.Name != "generate_data" || cmd.Args["table_name"] != "users" {
 		t.Error("expected generate_data for users")
 	}
 }
@@ -102,11 +102,11 @@ func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "test1" {
-		t.Errorf("got table %q, want test1", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "test1" {
+		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
 	}
 }
 
@@ -115,14 +115,14 @@ func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "test1" {
-		t.Errorf("got table %q, want test1", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "test1" {
+		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
 	}
-	if cmd.Generate.Rows != 100 {
-		t.Errorf("got rows %d, want 100", cmd.Generate.Rows)
+	if cmd.Args["rows"] != "100" {
+		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
 	}
 }
 
@@ -138,11 +138,11 @@ func TestParseReturnGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnGenerated == nil {
-		t.Fatal("expected ReturnGenerated command")
+	if cmd.Name != "return_generated" {
+		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.ReturnGenerated.Table != "test1" {
-		t.Errorf("got table %q, want test1", cmd.ReturnGenerated.Table)
+	if cmd.Args["table_name"] != "test1" {
+		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
 	}
 }
 
@@ -158,11 +158,11 @@ func TestParseReturnGeneratedCaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnGenerated == nil {
-		t.Fatal("expected ReturnGenerated command")
+	if cmd.Name != "return_generated" {
+		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.ReturnGenerated.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.ReturnGenerated.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
 }
 
@@ -171,11 +171,11 @@ func TestParseReturnActual(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnActual == nil {
-		t.Fatal("expected ReturnActual command")
+	if cmd.Name != "return_actual" {
+		t.Fatalf("expected return_actual, got %q", cmd.Name)
 	}
-	if cmd.ReturnActual.Table != "test1" {
-		t.Errorf("got table %q, want test1", cmd.ReturnActual.Table)
+	if cmd.Args["table_name"] != "test1" {
+		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
 	}
 }
 
@@ -191,11 +191,11 @@ func TestParseReturnActualCaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnActual == nil {
-		t.Fatal("expected ReturnActual command")
+	if cmd.Name != "return_actual" {
+		t.Fatalf("expected return_actual, got %q", cmd.Name)
 	}
-	if cmd.ReturnActual.Table != "orders" {
-		t.Errorf("got table %q, want orders", cmd.ReturnActual.Table)
+	if cmd.Args["table_name"] != "orders" {
+		t.Errorf("got table_name %q, want orders", cmd.Args["table_name"])
 	}
 }
 
@@ -204,11 +204,11 @@ func TestParseGenerateDataWithScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Scenario != "edge" {
-		t.Errorf("got scenario %q, want edge", cmd.Generate.Scenario)
+	if cmd.Args["scenario"] != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Args["scenario"])
 	}
 }
 
@@ -217,11 +217,11 @@ func TestParseGenerateDataWithoutScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Generate.Scenario != "" {
-		t.Errorf("got scenario %q, want empty", cmd.Generate.Scenario)
+	if _, ok := cmd.Args["scenario"]; ok {
+		t.Errorf("expected no scenario arg, got %q", cmd.Args["scenario"])
 	}
 }
 
@@ -230,11 +230,11 @@ func TestParseReturnGeneratedWithScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnGenerated == nil {
-		t.Fatal("expected ReturnGenerated command")
+	if cmd.Name != "return_generated" {
+		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.ReturnGenerated.Scenario != "edge" {
-		t.Errorf("got scenario %q, want edge", cmd.ReturnGenerated.Scenario)
+	if cmd.Args["scenario"] != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Args["scenario"])
 	}
 }
 
@@ -243,11 +243,11 @@ func TestParseReturnActualWithScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.ReturnActual == nil {
-		t.Fatal("expected ReturnActual command")
+	if cmd.Name != "return_actual" {
+		t.Fatalf("expected return_actual, got %q", cmd.Name)
 	}
-	if cmd.ReturnActual.Scenario != "edge" {
-		t.Errorf("got scenario %q, want edge", cmd.ReturnActual.Scenario)
+	if cmd.Args["scenario"] != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Args["scenario"])
 	}
 }
 
@@ -256,14 +256,14 @@ func TestParseSyncNoArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Sync == nil {
-		t.Fatal("expected Sync command")
+	if cmd.Name != "sync" {
+		t.Fatalf("expected sync, got %q", cmd.Name)
 	}
-	if cmd.Sync.Table != "" {
-		t.Errorf("expected empty table, got %q", cmd.Sync.Table)
+	if cmd.Args["table_name"] != "" {
+		t.Errorf("expected empty table_name, got %q", cmd.Args["table_name"])
 	}
-	if cmd.Sync.Scenario != "" {
-		t.Errorf("expected empty scenario, got %q", cmd.Sync.Scenario)
+	if cmd.Args["scenario"] != "" {
+		t.Errorf("expected empty scenario, got %q", cmd.Args["scenario"])
 	}
 }
 
@@ -272,14 +272,14 @@ func TestParseSyncWithTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Sync == nil {
-		t.Fatal("expected Sync command")
+	if cmd.Name != "sync" {
+		t.Fatalf("expected sync, got %q", cmd.Name)
 	}
-	if cmd.Sync.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.Sync.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
-	if cmd.Sync.Scenario != "" {
-		t.Errorf("expected empty scenario, got %q", cmd.Sync.Scenario)
+	if _, ok := cmd.Args["scenario"]; ok {
+		t.Errorf("expected no scenario arg, got %q", cmd.Args["scenario"])
 	}
 }
 
@@ -288,14 +288,14 @@ func TestParseSyncWithScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Sync == nil {
-		t.Fatal("expected Sync command")
+	if cmd.Name != "sync" {
+		t.Fatalf("expected sync, got %q", cmd.Name)
 	}
-	if cmd.Sync.Table != "" {
-		t.Errorf("expected empty table, got %q", cmd.Sync.Table)
+	if _, ok := cmd.Args["table_name"]; ok {
+		t.Errorf("expected no table_name arg, got %q", cmd.Args["table_name"])
 	}
-	if cmd.Sync.Scenario != "edge" {
-		t.Errorf("got scenario %q, want edge", cmd.Sync.Scenario)
+	if cmd.Args["scenario"] != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Args["scenario"])
 	}
 }
 
@@ -304,14 +304,14 @@ func TestParseSyncWithBoth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Sync == nil {
-		t.Fatal("expected Sync command")
+	if cmd.Name != "sync" {
+		t.Fatalf("expected sync, got %q", cmd.Name)
 	}
-	if cmd.Sync.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.Sync.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
-	if cmd.Sync.Scenario != "edge" {
-		t.Errorf("got scenario %q, want edge", cmd.Sync.Scenario)
+	if cmd.Args["scenario"] != "edge" {
+		t.Errorf("got scenario %q, want edge", cmd.Args["scenario"])
 	}
 }
 
@@ -320,13 +320,20 @@ func TestParseRegenerateTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Generate == nil {
-		t.Fatal("expected Generate command")
+	if cmd.Name != "generate_data" {
+		t.Fatalf("expected generate_data (resolved alias), got %q", cmd.Name)
 	}
-	if cmd.Generate.Table != "users" {
-		t.Errorf("got table %q, want users", cmd.Generate.Table)
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
 	}
-	if cmd.Generate.Rows != 200 {
-		t.Errorf("got rows %d, want 200", cmd.Generate.Rows)
+	if cmd.Args["rows"] != "200" {
+		t.Errorf("got rows %q, want 200", cmd.Args["rows"])
+	}
+}
+
+func TestParseUnknownParameter(t *testing.T) {
+	_, err := Parse("CALL gendb.generate_data(table_name => 'users', bogus => 'value')")
+	if err == nil {
+		t.Error("expected parse error for unknown parameter")
 	}
 }

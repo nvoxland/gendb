@@ -17,7 +17,6 @@ import (
 type Proxy struct {
 	listenAddr  string
 	realAddr    string
-	executor    *lang.Executor
 	listener    net.Listener
 	ready       chan struct{}
 	mu          sync.Mutex
@@ -49,11 +48,10 @@ type Config struct {
 }
 
 // New creates a new proxy.
-func New(cfg Config, executor *lang.Executor) *Proxy {
+func New(cfg Config) *Proxy {
 	return &Proxy{
 		listenAddr: cfg.ListenAddr,
 		realAddr:   cfg.RealAddr,
-		executor:   executor,
 		ready:      make(chan struct{}),
 		sessions:   make(map[net.Conn]*session),
 	}
@@ -292,7 +290,7 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 	defer sess.resumeRelay()
 
 	// If the command needs a DB connection, lazily create a *pgx.Conn and reuse it.
-	if cmd.Generate != nil || cmd.ReturnGenerated != nil || cmd.ReturnActual != nil || cmd.Sync != nil {
+	if cmd.NeedsConn() {
 		if sess.pgxConn == nil {
 			pgxConn, err := p.createPgxConn(ctx, sess)
 			if err != nil {
@@ -304,7 +302,7 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 		ctx = withConn(ctx, sess.pgxConn)
 	}
 
-	result, err := p.executor.Execute(ctx, cmd)
+	result, err := lang.Execute(ctx, cmd)
 	if err != nil {
 		p.sendError(clientConn, err.Error())
 		return

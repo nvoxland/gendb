@@ -1,35 +1,41 @@
 package lang
 
-// Command is the top-level AST node for all GENDB commands.
+import "context"
+
+// Command is the unified AST node for all GenDB commands.
 type Command struct {
-	Generate        *GenerateCommand
-	ReturnGenerated *ReturnGeneratedCommand
-	ReturnActual    *ReturnActualCommand
-	Sync            *SyncCommand
+	Name string            // canonical name, e.g. "generate_data"
+	Args map[string]string // validated params, e.g. {"table_name": "users", "rows": "500"}
 }
 
-// GenerateCommand: CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42, scenario => 'edge')
-type GenerateCommand struct {
-	Table    string
-	Rows     int
-	Seed     *int64
-	Scenario string
+// NeedsConn reports whether this command requires a database connection.
+func (c *Command) NeedsConn() bool {
+	if def, ok := Registry[c.Name]; ok {
+		return def.NeedsConn
+	}
+	return false
 }
 
-// ReturnGeneratedCommand: CALL gendb.return_generated(table_name => 'users', scenario => 'edge')
-type ReturnGeneratedCommand struct {
-	Table    string
-	Scenario string
+// ParamDef describes a single parameter accepted by a command.
+type ParamDef struct {
+	Name     string
+	Required bool
 }
 
-// ReturnActualCommand: CALL gendb.return_actual(table_name => 'users', scenario => 'edge')
-type ReturnActualCommand struct {
-	Table    string
-	Scenario string
+// CommandDef is the registry entry for a GenDB command.
+type CommandDef struct {
+	Name      string
+	Params    []ParamDef
+	NeedsConn bool
+	Handler   HandlerFunc
 }
 
-// SyncCommand: CALL gendb.sync(table_name => 'users', scenario => 'edge')
-type SyncCommand struct {
-	Table    string // optional: filter to specific table
-	Scenario string // optional: filter to specific scenario
+// HandlerFunc is the signature for command handlers.
+type HandlerFunc func(ctx context.Context, args map[string]string) (*Result, error)
+
+// Result represents the output of a GenDB command execution.
+type Result struct {
+	Tag     string     // command completion tag, e.g. "GENDB GENERATE DATA FOR users ROWS 500"
+	Columns []string   // column names for tabular results
+	Rows    [][]string // row data for tabular results
 }

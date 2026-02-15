@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -252,11 +253,10 @@ func TestProxyE2E(t *testing.T) {
 	}
 
 	// Start the proxy
-	executor := lang.NewExecutor()
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-	}, executor)
+	})
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	defer proxyCancel()
@@ -343,17 +343,28 @@ func startPostgresContainer(t *testing.T) (pgAddr string) {
 	return ""
 }
 
-func TestGenerateDataWithVarcharConstraints(t *testing.T) {
-	pgAddr := startPostgresContainer(t)
-	ctx := context.Background()
+// registerGenerateHandler registers the generate_data handler for E2E tests.
+func registerGenerateHandler(t *testing.T) {
+	t.Helper()
+	t.Cleanup(lang.ResetHandlers)
 
-	executor := lang.NewExecutor()
-
-	// Wire up OnGenerate the same way serve.go does.
-	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64, scenario string) error {
+	lang.RegisterHandler("generate_data", func(ctx context.Context, args map[string]string) (*lang.Result, error) {
 		conn := ConnFromContext(ctx)
 		if conn == nil {
-			return fmt.Errorf("no database connection available")
+			return nil, fmt.Errorf("no database connection available")
+		}
+
+		table := args["table_name"]
+		rows, _ := strconv.Atoi(args["rows"])
+		scenario := args["scenario"]
+
+		var seed *int64
+		if s, ok := args["seed"]; ok {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid seed value %q", s)
+			}
+			seed = &n
 		}
 
 		inspector := schema.NewInspectorFromConn(conn)
@@ -368,7 +379,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 			})
 		}
 		if err != nil {
-			return fmt.Errorf("inspecting schema: %w", err)
+			return nil, fmt.Errorf("inspecting schema: %w", err)
 		}
 
 		for _, tbl := range sg.Tables {
@@ -380,7 +391,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 			singleTableGraph.SetTables([]*schema.Table{tbl})
 			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
 			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, tbl.Schema, tbl.Name), err)
+				return nil, fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, tbl.Schema, tbl.Name), err)
 			}
 
 			genCfg := config.GenerationConfig{
@@ -399,16 +410,27 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 				generator.WithTableNameMapper(mapper),
 			)
 			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
-				return fmt.Errorf("generating data for %s: %w", tbl.Name, err)
+				return nil, fmt.Errorf("generating data for %s: %w", tbl.Name, err)
 			}
 		}
-		return nil
-	}
+
+		if table == "" {
+			return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA ROWS %d", rows)}, nil
+		}
+		return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA FOR %s ROWS %d", table, rows)}, nil
+	})
+}
+
+func TestGenerateDataWithVarcharConstraints(t *testing.T) {
+	pgAddr := startPostgresContainer(t)
+	ctx := context.Background()
+
+	registerGenerateHandler(t)
 
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-	}, executor)
+	})
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	defer proxyCancel()
@@ -503,70 +525,17 @@ func TestSyncE2E(t *testing.T) {
 	pgAddr := startPostgresContainer(t)
 	ctx := context.Background()
 
-	executor := lang.NewExecutor()
+	registerGenerateHandler(t)
 
-	// Wire up OnGenerate (same as other E2E tests)
-	executor.OnGenerate = func(ctx context.Context, table string, rows int, seed *int64, scenario string) error {
+	// Register sync handler
+	lang.RegisterHandler("sync", func(ctx context.Context, args map[string]string) (*lang.Result, error) {
 		conn := ConnFromContext(ctx)
 		if conn == nil {
-			return fmt.Errorf("no database connection available")
+			return nil, fmt.Errorf("no database connection available")
 		}
 
-		inspector := schema.NewInspectorFromConn(conn)
-
-		var err error
-		var sg *schema.SchemaGraph
-		if table != "" {
-			sg, err = inspector.InspectTable(ctx, table)
-		} else {
-			sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
-				ExcludeSchemas: []string{shadow.SchemaName},
-			})
-		}
-		if err != nil {
-			return fmt.Errorf("inspecting schema: %w", err)
-		}
-
-		for _, tbl := range sg.Tables {
-			mapper := func(name string) string {
-				return shadow.ShadowTableName(scenario, tbl.Schema, name)
-			}
-
-			singleTableGraph := &schema.SchemaGraph{}
-			singleTableGraph.SetTables([]*schema.Table{tbl})
-			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
-			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return fmt.Errorf("creating shadow table: %w", err)
-			}
-
-			genCfg := config.GenerationConfig{
-				DefaultRows: 10,
-				Seed:        42,
-			}
-			if rows > 0 {
-				genCfg.DefaultRows = rows
-			}
-			if seed != nil {
-				genCfg.Seed = *seed
-			}
-
-			gen := generator.New(nil, genCfg,
-				generator.WithTargetSchema(shadow.SchemaName),
-				generator.WithTableNameMapper(mapper),
-			)
-			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
-				return fmt.Errorf("generating data for %s: %w", tbl.Name, err)
-			}
-		}
-		return nil
-	}
-
-	// Wire up OnSync
-	executor.OnSync = func(ctx context.Context, table string, scenario string) error {
-		conn := ConnFromContext(ctx)
-		if conn == nil {
-			return fmt.Errorf("no database connection available")
-		}
+		table := args["table_name"]
+		scenario := args["scenario"]
 
 		inspector := schema.NewInspectorFromConn(conn)
 
@@ -575,7 +544,7 @@ func TestSyncE2E(t *testing.T) {
 			WHERE table_schema = $1 AND table_type = 'BASE TABLE'
 		`, shadow.SchemaName)
 		if err != nil {
-			return fmt.Errorf("listing shadow tables: %w", err)
+			return nil, fmt.Errorf("listing shadow tables: %w", err)
 		}
 
 		var shadowNames []string
@@ -583,13 +552,13 @@ func TestSyncE2E(t *testing.T) {
 			var name string
 			if err := rows.Scan(&name); err != nil {
 				rows.Close()
-				return err
+				return nil, err
 			}
 			shadowNames = append(shadowNames, name)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, shadowName := range shadowNames {
@@ -610,7 +579,7 @@ func TestSyncE2E(t *testing.T) {
 			origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
 			if origErr != nil {
 				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
-					return err
+					return nil, err
 				}
 				continue
 			}
@@ -619,7 +588,7 @@ func TestSyncE2E(t *testing.T) {
 
 			shadowGraph, err := inspector.InspectTable(ctx, shadowName)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			shadowTable := shadowGraph.Tables[0]
 
@@ -636,7 +605,7 @@ func TestSyncE2E(t *testing.T) {
 				if _, exists := origCols[c.Name]; !exists {
 					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
 						qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
-						return err
+						return nil, err
 					}
 				}
 			}
@@ -658,30 +627,34 @@ func TestSyncE2E(t *testing.T) {
 
 				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
 					qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
-					return err
+					return nil, err
 				}
 
 				genCfg := config.GenerationConfig{DefaultRows: 100, Seed: 42}
 				gen := generator.New(nil, genCfg)
 				if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
-					return err
+					return nil, err
 				}
 
 				if !origCol.IsNullable {
 					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL",
 						qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
-						return err
+						return nil, err
 					}
 				}
 			}
 		}
-		return nil
-	}
+
+		if table != "" {
+			return &lang.Result{Tag: fmt.Sprintf("GENDB SYNC %s", table)}, nil
+		}
+		return &lang.Result{Tag: "GENDB SYNC"}, nil
+	})
 
 	p := New(Config{
 		ListenAddr: ":0",
 		RealAddr:   pgAddr,
-	}, executor)
+	})
 
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	defer proxyCancel()
