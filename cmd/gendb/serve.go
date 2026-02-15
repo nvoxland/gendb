@@ -75,6 +75,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	lang.RegisterHandler("sync", handleSync)
 	lang.RegisterHandler("return_generated", handleReturnGenerated)
 	lang.RegisterHandler("return_actual", handleReturnActual)
+	lang.RegisterHandler("drop_scenario", handleDropScenario)
 
 	p := proxy.New(proxy.Config{
 		ListenAddr: fmt.Sprintf(":%d", servePort),
@@ -455,4 +456,61 @@ func handleReturnActual(ctx context.Context, args map[string]string) (*lang.Resu
 		return nil, err
 	}
 	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", table)}, nil
+}
+
+func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Result, error) {
+	conn := proxy.ConnFromContext(ctx)
+	if conn == nil {
+		return nil, fmt.Errorf("no database connection available")
+	}
+
+	scenario := args["scenario"]
+	schemaFilter := args["schema"]
+
+	slog.Info("Handling drop_scenario", "scenario", scenario, "schema", schemaFilter)
+
+	// List all tables in the gendb schema
+	rows, err := conn.Query(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+	`, shadow.SchemaName)
+	if err != nil {
+		return nil, fmt.Errorf("listing shadow tables: %w", err)
+	}
+
+	var toDrop []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning shadow table name: %w", err)
+		}
+
+		sc, sourceSchema, _, ok := shadow.ParseShadowTableName(name)
+		if !ok {
+			continue
+		}
+		if sc != scenario {
+			continue
+		}
+		if schemaFilter != "" && sourceSchema != schemaFilter {
+			continue
+		}
+		toDrop = append(toDrop, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, name := range toDrop {
+		qualified := pgx.Identifier{shadow.SchemaName, name}.Sanitize()
+		slog.Info("Dropping shadow table", "table", qualified)
+		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualified)); err != nil {
+			return nil, fmt.Errorf("dropping table %s: %w", name, err)
+		}
+	}
+
+	slog.Info("drop_scenario complete", "scenario", scenario, "tables_dropped", len(toDrop))
+	return &lang.Result{Tag: fmt.Sprintf("GENDB DROP SCENARIO %s (%d tables)", scenario, len(toDrop))}, nil
 }

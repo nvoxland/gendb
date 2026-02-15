@@ -46,6 +46,13 @@ CREATE OR REPLACE PROCEDURE gendb.sync(
 
 COMMENT ON PROCEDURE gendb.sync IS 'Sync shadow table schemas with their original tables.';
 
+CREATE OR REPLACE PROCEDURE gendb.drop_scenario(
+    scenario text,
+    schema text DEFAULT NULL
+) LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'This procedure is handled by the GenDB proxy. Connect through the proxy on port 5433.'; END; $$;
+
+COMMENT ON PROCEDURE gendb.drop_scenario IS 'Drop all generated tables for a scenario. Args: scenario (required), schema (optional, limits to tables from that source schema).';
+
 CREATE TABLE IF NOT EXISTS gendb.generation_status (
     id               SERIAL PRIMARY KEY,
     command          TEXT NOT NULL,

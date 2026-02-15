@@ -26,6 +26,12 @@ var Registry = map[string]*CommandDef{
 			{Name: "table_name"}, {Name: "scenario"},
 		},
 	},
+	"drop_scenario": {
+		Name: "drop_scenario", NeedsConn: true,
+		Params: []ParamDef{
+			{Name: "scenario", Required: true}, {Name: "schema"},
+		},
+	},
 }
 
 // Aliases maps alternative command names to their canonical names.
