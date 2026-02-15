@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -66,8 +67,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 	close(p.ready)
 
-	fmt.Printf("GenDB proxy listening on %s\n", p.listenAddr)
-	fmt.Printf("  Real DB: %s\n", p.realAddr)
+	slog.Info("GenDB proxy started", "listen", p.listenAddr, "backend", p.realAddr)
 
 	go func() {
 		<-ctx.Done()
@@ -116,7 +116,7 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	clientBackend := pgproto3.NewBackend(clientConn, clientConn)
 	startupMsg, err := clientBackend.ReceiveStartupMessage()
 	if err != nil {
-		fmt.Printf("Error reading startup message: %v\n", err)
+		slog.Error("Failed to read startup message", "error", err)
 		return
 	}
 
@@ -124,10 +124,11 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	if _, ok := startupMsg.(*pgproto3.SSLRequest); ok {
 		// Deny SSL
 		clientConn.Write([]byte("N"))
+		slog.Debug("Denied SSL request, waiting for plaintext startup")
 		// Re-read the actual startup message
 		startupMsg, err = clientBackend.ReceiveStartupMessage()
 		if err != nil {
-			fmt.Printf("Error reading startup message after SSL: %v\n", err)
+			slog.Error("Failed to read startup message after SSL denial", "error", err)
 			return
 		}
 	}
@@ -135,7 +136,7 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	// Always connect to the real database
 	backendConn, err := net.Dial("tcp", p.realAddr)
 	if err != nil {
-		fmt.Printf("Error connecting to backend %s: %v\n", p.realAddr, err)
+		slog.Error("Failed to connect to backend", "backend", p.realAddr, "error", err)
 		p.sendError(clientConn, fmt.Sprintf("could not connect to backend: %v", err))
 		return
 	}
@@ -152,31 +153,34 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	switch msg := startupMsg.(type) {
 	case *pgproto3.StartupMessage:
 		sess.startupParams = msg.Parameters
+		slog.Info("New client connection", "user", msg.Parameters["user"], "database", msg.Parameters["database"])
 		startupBytes, err := msg.Encode(nil)
 		if err != nil {
-			fmt.Printf("Error encoding startup message: %v\n", err)
+			slog.Error("Failed to encode startup message", "error", err)
 			return
 		}
 		if _, err := backendConn.Write(startupBytes); err != nil {
-			fmt.Printf("Error forwarding startup: %v\n", err)
+			slog.Error("Failed to forward startup message to backend", "error", err)
 			return
 		}
 	default:
-		fmt.Printf("Unexpected startup message type: %T\n", msg)
+		slog.Error("Unexpected startup message type", "type", fmt.Sprintf("%T", msg))
 		return
 	}
 
 	// Relay auth and initial parameter messages until ReadyForQuery
 	if err := p.relayUntilReady(clientBackend, clientConn, backendConn, sess); err != nil {
-		fmt.Printf("Error during auth relay: %v\n", err)
+		slog.Error("Authentication relay failed", "error", err)
 		return
 	}
+	slog.Debug("Client authenticated successfully", "user", sess.startupParams["user"])
 
 	// On first successful connection, create stub procedures for intellisense
 	if !p.schemaReady.Load() {
 		if err := ensureGenDBSchema(backendConn); err != nil {
-			fmt.Printf("Warning: could not create gendb procedure stubs: %v\n", err)
+			slog.Warn("Could not create gendb schema stubs", "error", err)
 		} else {
+			slog.Info("Created gendb schema stubs for intellisense")
 			p.schemaReady.Store(true)
 		}
 	}
@@ -279,8 +283,11 @@ func (sess *session) resumeRelay() {
 }
 
 func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, sess *session, query string) {
+	slog.Info("Intercepted GenDB command", "query", query)
+
 	cmd, err := lang.Parse(query)
 	if err != nil {
+		slog.Error("Failed to parse GenDB command", "query", query, "error", err)
 		p.sendError(clientConn, err.Error())
 		return
 	}
@@ -289,11 +296,20 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 	sess.pauseRelay()
 	defer sess.resumeRelay()
 
+	// Inject real address and connection params into context for background connections.
+	ctx = context.WithValue(ctx, realAddrKey{}, p.realAddr)
+	ctx = context.WithValue(ctx, connParamsKey{}, map[string]string{
+		"user":     sess.startupParams["user"],
+		"database": sess.startupParams["database"],
+	})
+
 	// If the command needs a DB connection, lazily create a *pgx.Conn and reuse it.
 	if cmd.NeedsConn() {
 		if sess.pgxConn == nil {
+			slog.Debug("Creating pgx connection for session")
 			pgxConn, err := p.createPgxConn(ctx, sess)
 			if err != nil {
+				slog.Error("Failed to create database connection", "error", err)
 				p.sendError(clientConn, fmt.Sprintf("creating database connection: %v", err))
 				return
 			}
@@ -304,10 +320,12 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 
 	result, err := lang.Execute(ctx, cmd)
 	if err != nil {
+		slog.Error("Command execution failed", "query", query, "error", err)
 		p.sendError(clientConn, err.Error())
 		return
 	}
 
+	slog.Info("Command completed", "tag", result.Tag)
 	p.sendResult(clientConn, result)
 }
 
@@ -351,7 +369,7 @@ func (p *Proxy) sendResult(conn net.Conn, result *lang.Result) {
 		rd := &pgproto3.RowDescription{Fields: fields}
 		buf, err = rd.Encode(buf)
 		if err != nil {
-			fmt.Printf("Error encoding RowDescription: %v\n", err)
+			slog.Error("Failed to encode RowDescription", "error", err)
 			return
 		}
 
@@ -364,7 +382,7 @@ func (p *Proxy) sendResult(conn net.Conn, result *lang.Result) {
 			dr := &pgproto3.DataRow{Values: values}
 			buf, err = dr.Encode(buf)
 			if err != nil {
-				fmt.Printf("Error encoding DataRow: %v\n", err)
+				slog.Error("Failed to encode DataRow", "error", err)
 				return
 			}
 		}
@@ -374,7 +392,7 @@ func (p *Proxy) sendResult(conn net.Conn, result *lang.Result) {
 	cc := &pgproto3.CommandComplete{CommandTag: []byte(result.Tag)}
 	buf, err = cc.Encode(buf)
 	if err != nil {
-		fmt.Printf("Error encoding CommandComplete: %v\n", err)
+		slog.Error("Failed to encode CommandComplete", "error", err)
 		return
 	}
 
@@ -382,7 +400,7 @@ func (p *Proxy) sendResult(conn net.Conn, result *lang.Result) {
 	rfq := &pgproto3.ReadyForQuery{TxStatus: 'I'}
 	buf, err = rfq.Encode(buf)
 	if err != nil {
-		fmt.Printf("Error encoding ReadyForQuery: %v\n", err)
+		slog.Error("Failed to encode ReadyForQuery", "error", err)
 		return
 	}
 
@@ -485,6 +503,8 @@ func (p *Proxy) relayClientAuth(clientBackend *pgproto3.Backend, backendConn net
 }
 
 type connKey struct{}
+type realAddrKey struct{}
+type connParamsKey struct{}
 
 func withConn(ctx context.Context, conn *pgx.Conn) context.Context {
 	return context.WithValue(ctx, connKey{}, conn)
@@ -494,6 +514,22 @@ func withConn(ctx context.Context, conn *pgx.Conn) context.Context {
 // or nil if not present.
 func ConnFromContext(ctx context.Context) *pgx.Conn {
 	if v, ok := ctx.Value(connKey{}).(*pgx.Conn); ok {
+		return v
+	}
+	return nil
+}
+
+// RealAddrFromContext returns the real database address from the context.
+func RealAddrFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(realAddrKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// ConnParamsFromContext returns the connection parameters (user, database) from the context.
+func ConnParamsFromContext(ctx context.Context) map[string]string {
+	if v, ok := ctx.Value(connParamsKey{}).(map[string]string); ok {
 		return v
 	}
 	return nil

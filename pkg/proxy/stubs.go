@@ -45,6 +45,20 @@ CREATE OR REPLACE PROCEDURE gendb.sync(
 ) LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'This procedure is handled by the GenDB proxy. Connect through the proxy on port 5433.'; END; $$;
 
 COMMENT ON PROCEDURE gendb.sync IS 'Sync shadow table schemas with their original tables.';
+
+CREATE TABLE IF NOT EXISTS gendb.generation_status (
+    id               SERIAL PRIMARY KEY,
+    command          TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    total_tables     INT NOT NULL DEFAULT 0,
+    completed_tables INT NOT NULL DEFAULT 0,
+    current_table    TEXT,
+    total_rows       INT NOT NULL DEFAULT 0,
+    completed_rows   INT NOT NULL DEFAULT 0,
+    error_message    TEXT,
+    started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_update      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 // ensureGenDBSchema sends the setup SQL over a raw backend connection to create

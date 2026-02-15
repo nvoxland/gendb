@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/generator"
@@ -56,7 +58,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create LLM client
 	appLLMClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKey)
-	fmt.Printf("LLM configured: model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
+	slog.Info("LLM configured", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 
 	realAddr := fmt.Sprintf("%s:%d", dbHostname, dbPort)
 
@@ -77,11 +79,27 @@ func runServe(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\nShutting down proxy...")
+		slog.Info("Shutting down proxy...")
 		cancel()
 	}()
 
 	return p.Start(ctx)
+}
+
+// connectToDB creates an independent *pgx.Conn by dialing the real database directly.
+func connectToDB(realAddr, user, database string) (*pgx.Conn, error) {
+	slog.Debug("Creating independent DB connection", "addr", realAddr, "user", user, "database", database)
+	host, port, _ := strings.Cut(realAddr, ":")
+	connStr := fmt.Sprintf("host=%s port=%s user=%s database=%s sslmode=disable",
+		host, port, user, database)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to %s: %w", realAddr, err)
+	}
+	slog.Debug("Independent DB connection established", "addr", realAddr)
+	return conn, nil
 }
 
 func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, error) {
@@ -94,6 +112,9 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
 
+	slog.Info("Handling generate_data", "table", table, "rows", rows, "scenario", scenario)
+
+	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
 
 	var err error
@@ -109,6 +130,9 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		return nil, fmt.Errorf("inspecting schema: %w", err)
 	}
 
+	slog.Info("Schema inspected", "tables", len(sg.Tables))
+
+	// 2. Create shadow tables (sync, using session pgxConn)
 	for _, t := range sg.Tables {
 		mapper := func(name string) string {
 			return shadow.ShadowTableName(scenario, t.Schema, name)
@@ -120,28 +144,126 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		if _, err := conn.Exec(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, t.Schema, t.Name), err)
 		}
+		slog.Debug("Created shadow table", "shadow_table", shadow.ShadowTableName(scenario, t.Schema, t.Name))
+	}
+
+	// 3. Create an independent DB connection for background work
+	realAddr := proxy.RealAddrFromContext(ctx)
+	connParams := proxy.ConnParamsFromContext(ctx)
+	if realAddr == "" || connParams == nil {
+		return nil, fmt.Errorf("missing connection parameters for background generation")
+	}
+
+	bgConn, err := connectToDB(realAddr, connParams["user"], connParams["database"])
+	if err != nil {
+		return nil, fmt.Errorf("creating background connection: %w", err)
+	}
+
+	// 4. Insert status row
+	command := "generate_data"
+	if table != "" {
+		command = fmt.Sprintf("generate_data(%s)", table)
+	}
+
+	var statusID int
+	err = conn.QueryRow(ctx,
+		`INSERT INTO gendb.generation_status (command, status, total_tables)
+		 VALUES ($1, 'pending', $2)
+		 RETURNING id`,
+		command, len(sg.Tables),
+	).Scan(&statusID)
+	if err != nil {
+		bgConn.Close(context.Background())
+		return nil, fmt.Errorf("inserting generation status: %w", err)
+	}
+
+	// 5. Launch background goroutine
+	slog.Info("Launching background data generation", "status_id", statusID, "tables", len(sg.Tables))
+	go runBackgroundGeneration(bgConn, sg, scenario, rows, statusID)
+
+	return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA STARTED (status id: %d)", statusID)}, nil
+}
+
+func runBackgroundGeneration(bgConn *pgx.Conn, sg *schema.SchemaGraph, scenario string, rows, statusID int) {
+	defer bgConn.Close(context.Background())
+	ctx := context.Background()
+
+	slog.Info("Background generation started", "status_id", statusID, "tables", len(sg.Tables))
+
+	// Update status to in_progress
+	updateGenerationStatus(ctx, bgConn, statusID, "in_progress", "", "", 0, 0, 0, 0)
+
+	completedTables := 0
+	totalTables := len(sg.Tables)
+
+	for _, t := range sg.Tables {
+		slog.Info("Background generation: processing table", "status_id", statusID, "table", t.Name,
+			"progress", fmt.Sprintf("%d/%d", completedTables+1, totalTables))
+
+		mapper := func(name string) string {
+			return shadow.ShadowTableName(scenario, t.Schema, name)
+		}
+
+		singleTableGraph := &schema.SchemaGraph{}
+		singleTableGraph.SetTables([]*schema.Table{t})
 
 		genCfg := appConfig.Generation
 		if rows > 0 {
 			genCfg.DefaultRows = rows
 		}
 
+		progressFn := func(tableName string, compTables, totTables, compRows, totRows int) {
+			updateGenerationStatus(ctx, bgConn, statusID, "in_progress", "", tableName,
+				totTables, compTables, totRows, compRows)
+		}
+
 		gen, err := generator.New(appLLMClient, genCfg,
 			generator.WithTargetSchema(shadow.SchemaName),
 			generator.WithTableNameMapper(mapper),
+			generator.WithProgressFunc(progressFn),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("creating generator: %w", err)
+			slog.Error("Background generation: failed to create generator", "status_id", statusID, "table", t.Name, "error", err)
+			updateGenerationStatus(ctx, bgConn, statusID, "error", fmt.Sprintf("creating generator: %v", err), "", 0, 0, 0, 0)
+			return
 		}
-		if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
-			return nil, fmt.Errorf("generating data for %s: %w", t.Name, err)
+
+		if err := gen.Generate(ctx, singleTableGraph, bgConn); err != nil {
+			slog.Error("Background generation: failed", "status_id", statusID, "table", t.Name, "error", err)
+			updateGenerationStatus(ctx, bgConn, statusID, "error", fmt.Sprintf("generating data for %s: %v", t.Name, err), t.Name,
+				totalTables, completedTables, 0, 0)
+			return
 		}
+
+		completedTables++
+		slog.Info("Background generation: table complete", "status_id", statusID, "table", t.Name,
+			"completed", completedTables, "total", totalTables)
+		updateGenerationStatus(ctx, bgConn, statusID, "in_progress", "", t.Name,
+			totalTables, completedTables, 0, 0)
 	}
 
-	if table == "" {
-		return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA ROWS %d", rows)}, nil
+	slog.Info("Background generation completed", "status_id", statusID, "tables", completedTables)
+	updateGenerationStatus(ctx, bgConn, statusID, "completed", "", "",
+		totalTables, completedTables, 0, 0)
+}
+
+func updateGenerationStatus(ctx context.Context, conn *pgx.Conn, statusID int, status, errMsg, currentTable string, totalTables, completedTables, totalRows, completedRows int) {
+	_, err := conn.Exec(ctx,
+		`UPDATE gendb.generation_status SET
+			status = $1,
+			error_message = $2,
+			current_table = $3,
+			total_tables = CASE WHEN $4 > 0 THEN $4 ELSE total_tables END,
+			completed_tables = CASE WHEN $5 > 0 THEN $5 ELSE completed_tables END,
+			total_rows = CASE WHEN $6 > 0 THEN $6 ELSE total_rows END,
+			completed_rows = CASE WHEN $7 > 0 THEN $7 ELSE completed_rows END,
+			last_update = now()
+		 WHERE id = $8`,
+		status, errMsg, currentTable, totalTables, completedTables, totalRows, completedRows, statusID,
+	)
+	if err != nil {
+		slog.Warn("Failed to update generation status", "status_id", statusID, "error", err)
 	}
-	return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA FOR %s ROWS %d", table, rows)}, nil
 }
 
 func handleSync(ctx context.Context, args map[string]string) (*lang.Result, error) {
@@ -194,7 +316,7 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 
 		origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
 		if origErr != nil {
-			fmt.Printf("Dropping orphaned shadow table %s (original %s.%s not found)\n", shadowName, sourceSchema, sourceTable)
+			slog.Info("Dropping orphaned shadow table", "shadow_table", shadowName, "original_schema", sourceSchema, "original_table", sourceTable)
 			if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
 				return nil, fmt.Errorf("dropping orphaned shadow table %s: %w", shadowName, err)
 			}
@@ -220,7 +342,7 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 
 		for _, c := range shadowTable.Columns {
 			if _, exists := origCols[c.Name]; !exists {
-				fmt.Printf("  Dropping column %s from %s\n", c.Name, shadowName)
+				slog.Info("Dropping removed column from shadow table", "column", c.Name, "shadow_table", shadowName)
 				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
 					qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
 					return nil, fmt.Errorf("dropping column %s from %s: %w", c.Name, shadowName, err)
@@ -243,7 +365,7 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 				continue
 			}
 
-			fmt.Printf("  Adding column %s to %s\n", origCol.Name, shadowName)
+			slog.Info("Adding new column to shadow table", "column", origCol.Name, "shadow_table", shadowName)
 
 			if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
 				qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {

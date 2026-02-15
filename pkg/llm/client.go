@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/nvoxland/gendb/pkg/schema"
@@ -52,12 +53,16 @@ const chunkSize = 50
 // GenerateTableData generates rows for a table via LLM, chunking if needed.
 func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([]map[string]any, error) {
 	if req.RowCount <= chunkSize {
+		slog.Debug("Requesting LLM data (single chunk)", "table", req.Table.Name, "rows", req.RowCount)
 		return c.generateChunk(ctx, req, req.RowCount)
 	}
 
+	slog.Debug("Requesting LLM data (chunked)", "table", req.Table.Name, "rows", req.RowCount, "chunk_size", chunkSize)
 	var allRows []map[string]any
 	remaining := req.RowCount
+	chunk := 0
 	for remaining > 0 {
+		chunk++
 		batchSize := chunkSize
 		if remaining < batchSize {
 			batchSize = remaining
@@ -72,6 +77,7 @@ func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([
 			req.PreviousRows = allRows[len(allRows)-sampleSize:]
 		}
 
+		slog.Debug("Generating chunk", "table", req.Table.Name, "chunk", chunk, "batch_size", batchSize, "remaining", remaining)
 		rows, err := c.generateChunk(ctx, req, batchSize)
 		if err != nil {
 			return nil, err
@@ -80,12 +86,14 @@ func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([
 		remaining -= batchSize
 	}
 
+	slog.Debug("LLM generation complete", "table", req.Table.Name, "total_rows", len(allRows))
 	return allRows, nil
 }
 
 func (c *Client) generateChunk(ctx context.Context, req TableDataRequest, count int) ([]map[string]any, error) {
 	prompt := buildPrompt(req, count)
 
+	slog.Debug("Sending LLM request", "model", c.model, "table", req.Table.Name, "requested_rows", count)
 	resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
@@ -94,20 +102,25 @@ func (c *Client) generateChunk(ctx context.Context, req TableDataRequest, count 
 		},
 	})
 	if err != nil {
+		slog.Error("LLM API call failed", "model", c.model, "table", req.Table.Name, "error", err)
 		return nil, fmt.Errorf("LLM API call failed: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
+		slog.Error("LLM returned no choices", "model", c.model, "table", req.Table.Name)
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
+	slog.Debug("LLM response received", "table", req.Table.Name, "response_length", len(resp.Choices[0].Message.Content))
 	content := fixJSON(stripCodeBlock(resp.Choices[0].Message.Content))
 
 	var rows []map[string]any
 	if err := json.Unmarshal([]byte(content), &rows); err != nil {
+		slog.Error("Failed to parse LLM response as JSON", "table", req.Table.Name, "error", err)
 		return nil, fmt.Errorf("parsing LLM response as JSON array: %w\nContent: %s", err, content)
 	}
 
+	slog.Debug("Parsed LLM response", "table", req.Table.Name, "parsed_rows", len(rows))
 	return rows, nil
 }
 
@@ -194,6 +207,8 @@ func buildPrompt(req TableDataRequest, count int) string {
 
 // GenerateColumnValues generates values for a single column across multiple rows.
 func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string, table *schema.Table, col *schema.Column, count int) ([]any, error) {
+	slog.Debug("Generating column values via LLM", "table", table.Name, "column", col.Name, "count", count)
+
 	prompt := fmt.Sprintf(
 		"Database schema context:\n%s\nGenerate %d realistic values for column %q (type: %s) in table %q.\nReturn ONLY a JSON array of values. No explanation.",
 		schemaContext, count, col.Name, col.DataType, table.Name,
@@ -207,10 +222,12 @@ func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string,
 		},
 	})
 	if err != nil {
+		slog.Error("LLM API call failed for column values", "table", table.Name, "column", col.Name, "error", err)
 		return nil, fmt.Errorf("LLM API call failed: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
+		slog.Error("LLM returned no choices for column values", "table", table.Name, "column", col.Name)
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
@@ -218,9 +235,11 @@ func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string,
 
 	var values []any
 	if err := json.Unmarshal([]byte(content), &values); err != nil {
+		slog.Error("Failed to parse LLM column values response", "table", table.Name, "column", col.Name, "error", err)
 		return nil, fmt.Errorf("parsing LLM response: %w\nContent: %s", err, content)
 	}
 
+	slog.Debug("Generated column values", "table", table.Name, "column", col.Name, "values", len(values))
 	return values, nil
 }
 

@@ -3,6 +3,7 @@ package generator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"strings"
 
@@ -12,12 +13,16 @@ import (
 	"github.com/nvoxland/gendb/pkg/schema"
 )
 
+// ProgressFunc is called after each table's rows are inserted to report progress.
+type ProgressFunc func(tableName string, completedTables, totalTables, completedRows, totalRows int)
+
 // Generator produces synthetic data for a schema.
 type Generator struct {
 	llmClient       *llm.Client
 	cfg             config.GenerationConfig
 	targetSchema    string
 	tableNameMapper func(string) string
+	progressFunc    ProgressFunc
 }
 
 // Option configures a Generator.
@@ -34,6 +39,13 @@ func WithTargetSchema(schema string) Option {
 func WithTableNameMapper(mapper func(string) string) Option {
 	return func(g *Generator) {
 		g.tableNameMapper = mapper
+	}
+}
+
+// WithProgressFunc sets a callback that is invoked after each table's rows are inserted.
+func WithProgressFunc(fn ProgressFunc) Option {
+	return func(g *Generator) {
+		g.progressFunc = fn
 	}
 }
 
@@ -59,9 +71,18 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 	// Track generated PKs for FK resolution
 	pkValues := make(map[string][]map[string]any) // table -> list of PK value maps
 
+	totalRows := 0
+	for _, t := range sg.Tables {
+		totalRows += g.rowCount(t.Name)
+	}
+	completedTables := 0
+	completedRows := 0
+
+	slog.Info("Starting data generation", "tables", len(sg.Tables), "total_rows", totalRows)
+
 	for _, table := range sg.Tables {
 		rows := g.rowCount(table.Name)
-		fmt.Printf("Generating %d rows for %s via LLM...\n", rows, table.Name)
+		slog.Info("Generating rows via LLM", "table", table.Name, "rows", rows)
 
 		// Identify skip columns
 		skipCols := g.skipColumns(table)
@@ -153,7 +174,13 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 		}
 
 		pkValues[table.Name] = extractPKValues(table, generatedRows)
-		fmt.Printf("  Inserted %d rows into %s\n", len(generatedRows), table.Name)
+		slog.Info("Inserted rows", "table", table.Name, "rows", len(generatedRows))
+
+		completedTables++
+		completedRows += len(generatedRows)
+		if g.progressFunc != nil {
+			g.progressFunc(table.Name, completedTables, len(sg.Tables), completedRows, totalRows)
+		}
 	}
 
 	return nil
