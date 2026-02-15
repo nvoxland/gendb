@@ -1,14 +1,13 @@
 # Configuration
 
-GenDB is configured via `gendb.yaml`.
+GenDB is configured via `gendb.yaml`. Pass a custom path with `--config`.
 
 ## Precedence
 
 Settings are applied in this order (highest priority first):
 
-1. **`gendb.yaml`** — file-based configuration
-2. **LLM recommendations** — the generation plan produced by schema analysis
-3. **Type-based defaults** — fallback generators based on column data type
+1. **`gendb.yaml`** — file-based column instructions
+2. **LLM generation** — the LLM generates data based on schema context and instructions
 
 ## Full Reference
 
@@ -21,21 +20,16 @@ llm:
 
 generation:
   default_rows: 100       # Rows per table unless overridden
-  seed: 42                # Random seed for reproducibility
 
   tables:                 # Per-table overrides
     users:
       rows: 500
       columns:
         bio:
-          generator: llm
           prompt: "Write a short professional bio"
         role:
           generator: one_of
           values: ["admin", "user", "moderator"]
-        email:
-          generator: internet.email
-          template: "{first_name}.{last_name}@example.com"
     orders:
       rows: 2000
 
@@ -43,20 +37,18 @@ generation:
     - pattern: "*_sku"
       generator: regex
       format: "[A-Z]{3}-[0-9]{6}"
-    - pattern: "*_email"
-      generator: internet.email
 ```
 
 ### Notes
 
-1. **`llm.provider`** — LLM provider for schema analysis:
+1. **`llm.provider`** — LLM provider for data generation:
     - `ollama` (default) — local Ollama instance
     - `openai` — OpenAI API
     - `custom` — any OpenAI-compatible endpoint
 
 2. **`generation.default_rows`** — Default number of rows to generate per table. Can be overridden per-table in the `tables` section.
 
-3. **`generation.tables`** — Per-table configuration. Each table can specify a custom row count and per-column generator overrides. See [Data Generators](generators.md) for available generators.
+3. **`generation.tables`** — Per-table configuration. Each table can specify a custom row count and per-column instructions for the LLM.
 
 4. **`generation.column_rules`** — Pattern-based rules applied across all tables. Patterns use glob syntax (`*` for prefix/suffix matching). Rules are matched against column names.
 
@@ -66,25 +58,22 @@ Each column override supports these fields:
 
 | Field | Description |
 |-------|-------------|
-| `generator` | Generator name (e.g., `internet.email`, `one_of`, `llm`) |
-| `prompt` | Prompt text for the `llm` generator |
-| `values` | List of allowed values for the `one_of` generator |
-| `format` | Regex pattern for the `regex` generator |
-| `template` | Template string with `{column_name}` placeholders |
+| `generator` | Override type: `one_of`, `regex`, or `skip` |
+| `prompt` | Direct instruction to the LLM for this column |
+| `values` | List of allowed values for `one_of` |
+| `format` | Regex pattern for `regex` |
 
 ## Column Rules
 
-Column rules apply generators based on column name patterns across all tables:
+Column rules apply instructions based on column name patterns across all tables:
 
 ```yaml
 column_rules:
-  - pattern: "*_email"      # Matches: user_email, admin_email, etc.
-    generator: internet.email
-  - pattern: "phone*"       # Matches: phone, phone_number, etc.
-    generator: phone.national
   - pattern: "*_sku"
     generator: regex
     format: "[A-Z]{3}-[0-9]{6}"
+  - pattern: "*_status"
+    generator: skip
 ```
 
 Patterns support `*` as a wildcard at the start, end, or both:

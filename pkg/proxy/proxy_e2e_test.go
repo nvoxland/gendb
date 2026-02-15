@@ -16,6 +16,7 @@ import (
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/generator"
 	"github.com/nvoxland/gendb/pkg/lang"
+	"github.com/nvoxland/gendb/pkg/llm"
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/nvoxland/gendb/pkg/shadow"
 )
@@ -358,15 +359,6 @@ func registerGenerateHandler(t *testing.T) {
 		rows, _ := strconv.Atoi(args["rows"])
 		scenario := args["scenario"]
 
-		var seed *int64
-		if s, ok := args["seed"]; ok {
-			n, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid seed value %q", s)
-			}
-			seed = &n
-		}
-
 		inspector := schema.NewInspectorFromConn(conn)
 
 		var err error
@@ -396,19 +388,20 @@ func registerGenerateHandler(t *testing.T) {
 
 			genCfg := config.GenerationConfig{
 				DefaultRows: 10,
-				Seed:        42,
 			}
 			if rows > 0 {
 				genCfg.DefaultRows = rows
 			}
-			if seed != nil {
-				genCfg.Seed = *seed
-			}
 
-			gen := generator.New(nil, genCfg,
+			// Create a test LLM client pointing to a local Ollama instance
+			testLLMClient := llm.NewClient("http://localhost:11434/v1", "llama3.2", "")
+			gen, err := generator.New(testLLMClient, genCfg,
 				generator.WithTargetSchema(shadow.SchemaName),
 				generator.WithTableNameMapper(mapper),
 			)
+			if err != nil {
+				return nil, fmt.Errorf("creating generator: %w", err)
+			}
 			if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
 				return nil, fmt.Errorf("generating data for %s: %w", tbl.Name, err)
 			}
@@ -630,8 +623,12 @@ func TestSyncE2E(t *testing.T) {
 					return nil, err
 				}
 
-				genCfg := config.GenerationConfig{DefaultRows: 100, Seed: 42}
-				gen := generator.New(nil, genCfg)
+				genCfg := config.GenerationConfig{DefaultRows: 100}
+				testLLMClient := llm.NewClient("http://localhost:11434/v1", "llama3.2", "")
+				gen, err := generator.New(testLLMClient, genCfg)
+				if err != nil {
+					return nil, fmt.Errorf("creating generator: %w", err)
+				}
 				if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
 					return nil, err
 				}

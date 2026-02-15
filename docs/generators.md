@@ -1,109 +1,54 @@
-# Data Generators
+# Data Generation
 
-GenDB uses generators to produce synthetic values for each column. The LLM analyzes your schema and assigns generators automatically, but you can override any assignment via [configuration](configuration.md) or [GENDB SQL](gendb-sql.md).
+GenDB uses an LLM to generate all synthetic data values directly. The LLM receives your schema (table names, column names, data types, constraints) and produces realistic, semantically coherent data in JSON batches.
 
-## Built-in Generators
+## How It Works
 
-### Person
+1. Tables are processed in **topological order** (referenced tables first)
+2. For each table, the LLM receives the full schema context, column types, constraints, and any config instructions
+3. Data is generated in batches of up to 50 rows per LLM call
+4. Generated values are type-coerced and validated before insertion
 
-| Generator | Output | Example |
-|-----------|--------|---------|
-| `person.first_name` | First name | `Emma` |
-| `person.last_name` | Last name | `Johnson` |
-| `person.full_name` | Full name | `Emma Johnson` |
+## Config Overrides
 
-### Internet
-
-| Generator | Output | Example |
-|-----------|--------|---------|
-| `internet.email` | Email address | `emma.johnson@example.com` |
-| `internet.url` | URL | `https://www.example.com/path` |
-| `internet.image_url` | Image URL | `https://picsum.photos/seed/abcdefgh/200/200` |
-| `internet.domain` | Domain name | `example.com` |
-
-`internet.email` supports a `template` field for custom formats:
+You can provide per-column instructions in `gendb.yaml` to guide the LLM:
 
 ```yaml
-columns:
-  email:
-    generator: internet.email
-    template: "{first_name}.{last_name}@company.com"
+generation:
+  tables:
+    users:
+      columns:
+        status:
+          generator: one_of
+          values: [active, inactive, pending]
+        bio:
+          prompt: "Write a short professional bio for a tech company employee"
+        sku:
+          generator: regex
+          format: "[A-Z]{3}-[0-9]{6}"
 ```
 
-### Phone
+### Override Types
 
-| Generator | Output | Example |
-|-----------|--------|---------|
-| `phone.national` | National phone number | `(555) 123-4567` |
-| `phone.international` | Formatted international number | `+1 (555) 123-4567` |
-
-### Address
-
-| Generator | Output | Example |
-|-----------|--------|---------|
-| `address.street` | Street address | `123 Main St` |
-| `address.city` | City | `Portland` |
-| `address.state` | State | `Oregon` |
-| `address.zip` | ZIP code | `97201` |
-| `address.country` | Country | `United States` |
-
-### Company
-
-| Generator | Output | Example |
-|-----------|--------|---------|
-| `company.name` | Company name | `Acme Corp` |
-| `company.bs` | Business buzzword phrase | `synergize scalable solutions` |
-| `company.suffix` | Company suffix | `LLC` |
-
-### Text
-
-| Generator | Output | Params |
-|-----------|--------|--------|
-| `lorem.sentence` | Single sentence | — |
-| `lorem.paragraph` | Paragraph of text | `sentences` (default: 3) |
-
-### Time
-
-| Generator | Output | Params |
-|-----------|--------|--------|
-| `time.recent` | Recent timestamp | `days` (default: 365) |
-| `time.past` | Timestamp in the past 5 years | — |
-| `time.future` | Timestamp in the next year | — |
-
-### Number
-
-| Generator | Output | Params |
-|-----------|--------|--------|
-| `number.int` | Integer | `min` (default: 0), `max` (default: 1000000) |
-| `number.float` | Float | `min` (default: 0.0), `max` (default: 1000000.0) |
-| `number.price` | Price value (1.00–999.99) | — |
-
-### Utility
-
-| Generator | Output | Notes |
-|-----------|--------|-------|
-| `uuid` | UUID v4 | `f47ac10b-58cc-4372-a567-0e02b2c3d479` |
-| `boolean` | `true` / `false` | — |
-| `one_of` | Random pick from a list | Requires `values` |
-| `regex` | String matching a pattern | Requires `format` |
-| `sequence` | Auto-incrementing integer | For serial/identity columns |
-| `skip` | Skip this column | For columns with defaults or generated values |
-| `llm` | LLM-generated text | Requires `prompt` or `template`; see [LLM Setup](llm.md#direct-llm-generation) |
+| Type | Config | LLM instruction |
+|------|--------|-----------------|
+| `one_of` | `generator: one_of` + `values` | "must be one of: [v1, v2, v3]" |
+| `regex` | `generator: regex` + `format` | "must match the regex pattern: ..." |
+| `skip` | `generator: skip` | Column excluded from generation |
+| `prompt` | `prompt: "..."` | Direct instruction to the LLM |
 
 ## Column Rules
 
-Column rules apply generators across all tables based on column name patterns:
+Column rules apply instructions across all tables based on column name patterns:
 
 ```yaml
 generation:
   column_rules:
-    - pattern: "*_email"
-      generator: internet.email
     - pattern: "*_sku"
       generator: regex
       format: "[A-Z]{3}-[0-9]{6}"
-    - pattern: "phone*"
-      generator: phone.national
+    - pattern: "*_status"
+      generator: skip
 ```
 
 Patterns use glob-style matching:
@@ -115,34 +60,14 @@ Patterns use glob-style matching:
 | `*name*` | `first_name`, `company_name` |
 | `status` | `status` (exact match) |
 
-## Type-Based Fallback
-
-When no generator is assigned (by the LLM, config, or column rules), GenDB falls back to generating values based on the PostgreSQL column type:
-
-| Column type | Generated value |
-|-------------|----------------|
-| `int`, `integer`, `bigint` | Random integer (0–100,000) |
-| `serial`, `bigserial` | Skipped (database-generated) |
-| `boolean` | Random `true`/`false` |
-| `text`, `varchar`, `char` | Random sentence |
-| `numeric`, `decimal`, `money` | Random price (1.00–999.99) |
-| `float`, `double`, `real` | Random float (0–1,000) |
-| `timestamp`, `date` | Random date in the past 2 years |
-| `uuid` | Random UUID v4 |
-| `json`, `jsonb` | `{}` |
-| Other | Random word |
-
 ## Foreign Key Resolution
 
 GenDB automatically resolves foreign key relationships:
 
 - Tables are generated in **topological order** — referenced tables first, then dependent tables
-- FK columns are populated by randomly selecting from the referenced table's already-generated primary key values
-- No configuration needed; this happens automatically based on schema introspection
+- FK values from parent tables are included in the LLM prompt so it can pick valid references
+- Post-processing validates FK values and replaces any invalid ones
 
 ## UNIQUE Constraint Handling
 
-For columns with UNIQUE constraints, GenDB retries value generation up to **100 times** per row to find a unique value. If a unique value cannot be generated after 100 attempts, generation fails with an error.
-
-!!! tip
-    If you hit uniqueness errors, try using generators with a larger value space (e.g., `uuid` instead of `number.int` with a small range), or reduce the row count for that table.
+Unique constraints are communicated to the LLM in the prompt. The LLM is instructed to generate unique values for columns with UNIQUE indexes. A post-processing step validates uniqueness using a tracker.

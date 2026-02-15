@@ -12,6 +12,7 @@ import (
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/generator"
 	"github.com/nvoxland/gendb/pkg/lang"
+	"github.com/nvoxland/gendb/pkg/llm"
 	"github.com/nvoxland/gendb/pkg/proxy"
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/nvoxland/gendb/pkg/shadow"
@@ -32,6 +33,12 @@ var (
 	servePort  int
 )
 
+// Package-level variables for config and LLM client, set at startup.
+var (
+	appConfig    *config.Config
+	appLLMClient *llm.Client
+)
+
 func init() {
 	serveCmd.Flags().StringVar(&dbHostname, "db-hostname", "localhost", "PostgreSQL server hostname")
 	serveCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL server port")
@@ -40,6 +47,17 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// Load config
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	appConfig = cfg
+
+	// Create LLM client
+	appLLMClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKey)
+	fmt.Printf("LLM configured: model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
+
 	realAddr := fmt.Sprintf("%s:%d", dbHostname, dbPort)
 
 	lang.RegisterHandler("generate_data", handleGenerate)
@@ -76,15 +94,6 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
 
-	var seed *int64
-	if s, ok := args["seed"]; ok {
-		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid seed value %q", s)
-		}
-		seed = &n
-	}
-
 	inspector := schema.NewInspectorFromConn(conn)
 
 	var err error
@@ -112,21 +121,18 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 			return nil, fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, t.Schema, t.Name), err)
 		}
 
-		genCfg := config.GenerationConfig{
-			DefaultRows: 100,
-			Seed:        42,
-		}
+		genCfg := appConfig.Generation
 		if rows > 0 {
 			genCfg.DefaultRows = rows
 		}
-		if seed != nil {
-			genCfg.Seed = *seed
-		}
 
-		gen := generator.New(nil, genCfg,
+		gen, err := generator.New(appLLMClient, genCfg,
 			generator.WithTargetSchema(shadow.SchemaName),
 			generator.WithTableNameMapper(mapper),
 		)
+		if err != nil {
+			return nil, fmt.Errorf("creating generator: %w", err)
+		}
 		if err := gen.Generate(ctx, singleTableGraph, conn); err != nil {
 			return nil, fmt.Errorf("generating data for %s: %w", t.Name, err)
 		}
@@ -244,11 +250,10 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 				return nil, fmt.Errorf("adding column %s to %s: %w", origCol.Name, shadowName, err)
 			}
 
-			genCfg := config.GenerationConfig{
-				DefaultRows: 100,
-				Seed:        42,
+			gen, err := generator.New(appLLMClient, appConfig.Generation)
+			if err != nil {
+				return nil, fmt.Errorf("creating generator for fill: %w", err)
 			}
-			gen := generator.New(nil, genCfg)
 			if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
 				return nil, fmt.Errorf("filling column %s in %s: %w", origCol.Name, shadowName, err)
 			}

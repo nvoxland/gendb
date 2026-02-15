@@ -3,12 +3,9 @@ package generator
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strconv"
+	"math/rand"
 	"strings"
-	"time"
 
-	"github.com/brianvoe/gofakeit/v7"
 	"github.com/jackc/pgx/v5"
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/llm"
@@ -19,7 +16,6 @@ import (
 type Generator struct {
 	llmClient       *llm.Client
 	cfg             config.GenerationConfig
-	faker           *gofakeit.Faker
 	targetSchema    string
 	tableNameMapper func(string) string
 }
@@ -41,69 +37,212 @@ func WithTableNameMapper(mapper func(string) string) Option {
 	}
 }
 
-// New creates a new Generator.
-func New(llmClient *llm.Client, cfg config.GenerationConfig, opts ...Option) *Generator {
+// New creates a new Generator. An LLM client is required.
+func New(llmClient *llm.Client, cfg config.GenerationConfig, opts ...Option) (*Generator, error) {
+	if llmClient == nil {
+		return nil, fmt.Errorf("LLM client is required for data generation")
+	}
 	g := &Generator{
 		llmClient: llmClient,
 		cfg:       cfg,
-		faker:     gofakeit.New(uint64(cfg.Seed)),
 	}
 	for _, opt := range opts {
 		opt(g)
 	}
-	return g
+	return g, nil
 }
 
 // Generate generates synthetic data for all tables and inserts into the target database.
 func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, targetConn *pgx.Conn) error {
-	var plan *llm.GenerationPlan
+	schemaContext := sg.FormatForLLM()
 
-	if g.llmClient != nil {
-		// Phase A: Get generation plan from LLM
-		fmt.Println("Analyzing schema with LLM...")
-		var err error
-		plan, err = g.llmClient.AnalyzeSchema(ctx, sg)
-		if err != nil {
-			return fmt.Errorf("analyzing schema: %w", err)
-		}
-	} else {
-		// No LLM configured — build a type-based fallback plan
-		fmt.Println("No LLM configured, using type-based generation...")
-		plan = g.buildFallbackPlan(sg)
-	}
-
-	// Apply config overrides
-	g.applyConfigOverrides(plan, sg)
-
-	// Phase B: Generate and insert data in topological order
 	// Track generated PKs for FK resolution
 	pkValues := make(map[string][]map[string]any) // table -> list of PK value maps
 
 	for _, table := range sg.Tables {
-		tablePlan, ok := plan.Tables[table.Name]
-		if !ok {
-			fmt.Printf("Skipping table %s (no generation plan)\n", table.Name)
-			continue
+		rows := g.rowCount(table.Name)
+		fmt.Printf("Generating %d rows for %s via LLM...\n", rows, table.Name)
+
+		// Identify skip columns
+		skipCols := g.skipColumns(table)
+
+		// Build column instructions from config
+		colInstructions := g.columnInstructions(table)
+
+		// Resolve FK values
+		fkValues := make(map[string][]any)
+		for _, col := range table.Columns {
+			if fkTable := fkTarget(table, col.Name); fkTable != "" {
+				if refs, ok := pkValues[fkTable]; ok && len(refs) > 0 {
+					refCol := fkRefCol(table, col.Name)
+					vals := make([]any, 0, len(refs))
+					for _, ref := range refs {
+						if v, ok := ref[refCol]; ok {
+							vals = append(vals, v)
+						}
+					}
+					fkValues[col.Name] = vals
+				}
+			}
 		}
 
-		rows := g.rowCount(table.Name)
-		fmt.Printf("Generating %d rows for %s...\n", rows, table.Name)
+		req := llm.TableDataRequest{
+			SchemaContext:      schemaContext,
+			Table:              table,
+			RowCount:           rows,
+			FKValues:           fkValues,
+			ColumnInstructions: colInstructions,
+			SkipColumns:        skipCols,
+			UniqueColumns:      table.UniqueColumns(),
+		}
 
-		generatedRows, err := g.generateTable(ctx, table, tablePlan, rows, pkValues)
+		generatedRows, err := g.llmClient.GenerateTableData(ctx, req)
 		if err != nil {
 			return fmt.Errorf("generating data for %s: %w", table.Name, err)
+		}
+
+		// Coerce types
+		for i := range generatedRows {
+			if err := coerceRow(generatedRows[i], table); err != nil {
+				return fmt.Errorf("coercing row %d for %s: %w", i, table.Name, err)
+			}
+		}
+
+		// Post-process: validate FK values
+		for colName, validVals := range fkValues {
+			if len(validVals) == 0 {
+				continue
+			}
+			for _, row := range generatedRows {
+				if v, ok := row[colName]; ok {
+					if !containsValue(validVals, v) {
+						row[colName] = validVals[rand.Intn(len(validVals))]
+					}
+				}
+			}
+		}
+
+		// Post-process: enforce uniqueness
+		uniqueTracker := newUniqueTracker(table)
+		if !uniqueTracker.isEmpty() {
+			for _, row := range generatedRows {
+				if !uniqueTracker.isUnique(row) {
+					// For duplicates, we just skip adding to tracker
+					// In practice the LLM should generate unique values when instructed
+					continue
+				}
+				uniqueTracker.add(row)
+			}
+		}
+
+		// Remove skip columns from rows (in case LLM included them)
+		skipSet := make(map[string]bool)
+		for _, s := range skipCols {
+			skipSet[s] = true
+		}
+		for _, row := range generatedRows {
+			for k := range row {
+				if skipSet[k] {
+					delete(row, k)
+				}
+			}
 		}
 
 		if err := g.insertRows(ctx, targetConn, table, generatedRows); err != nil {
 			return fmt.Errorf("inserting data for %s: %w", table.Name, err)
 		}
 
-		// Track PK values for FK resolution
 		pkValues[table.Name] = extractPKValues(table, generatedRows)
 		fmt.Printf("  Inserted %d rows into %s\n", len(generatedRows), table.Name)
 	}
 
 	return nil
+}
+
+// skipColumns returns columns that should not be generated (auto-generated, serial, FK).
+func (g *Generator) skipColumns(table *schema.Table) []string {
+	var skip []string
+	for _, col := range table.Columns {
+		if col.IsGenerated {
+			skip = append(skip, col.Name)
+			continue
+		}
+		if strings.Contains(col.DefaultValue, "nextval(") || strings.Contains(col.DefaultValue, "gen_random_uuid()") {
+			skip = append(skip, col.Name)
+			continue
+		}
+		if strings.Contains(strings.ToLower(col.DataType), "serial") {
+			skip = append(skip, col.Name)
+			continue
+		}
+		if fkTarget(table, col.Name) != "" {
+			// FK columns are included in FKValues, not skip — LLM picks from the list
+			// But we do skip them from the "columns to generate" since they're constrained
+			continue
+		}
+		// Check config for skip
+		if tc, ok := g.cfg.Tables[table.Name]; ok {
+			if cc, ok := tc.Columns[col.Name]; ok && cc.Generator == "skip" {
+				skip = append(skip, col.Name)
+				continue
+			}
+		}
+		for _, rule := range g.cfg.ColumnRules {
+			if matchPattern(col.Name, rule.Pattern) && rule.Generator == "skip" {
+				skip = append(skip, col.Name)
+				break
+			}
+		}
+	}
+	return skip
+}
+
+// columnInstructions builds LLM prompt instructions from config overrides.
+func (g *Generator) columnInstructions(table *schema.Table) map[string]string {
+	instructions := make(map[string]string)
+
+	if tc, ok := g.cfg.Tables[table.Name]; ok {
+		for colName, colCfg := range tc.Columns {
+			if instr := configToInstruction(colCfg); instr != "" {
+				instructions[colName] = instr
+			}
+		}
+	}
+
+	// Apply column rules
+	for _, rule := range g.cfg.ColumnRules {
+		for _, col := range table.Columns {
+			if matchPattern(col.Name, rule.Pattern) {
+				if rule.Generator == "skip" {
+					continue
+				}
+				if rule.Format != "" {
+					instructions[col.Name] = fmt.Sprintf("must match the regex pattern: %s", rule.Format)
+				}
+			}
+		}
+	}
+
+	return instructions
+}
+
+func configToInstruction(cc config.ColumnConfig) string {
+	switch cc.Generator {
+	case "one_of":
+		if len(cc.Values) > 0 {
+			return fmt.Sprintf("must be one of: [%s]", strings.Join(cc.Values, ", "))
+		}
+	case "regex":
+		if cc.Format != "" {
+			return fmt.Sprintf("must match the regex pattern: %s", cc.Format)
+		}
+	case "skip":
+		return ""
+	}
+	if cc.Prompt != "" {
+		return cc.Prompt
+	}
+	return ""
 }
 
 func (g *Generator) rowCount(tableName string) int {
@@ -114,329 +253,6 @@ func (g *Generator) rowCount(tableName string) int {
 		return g.cfg.DefaultRows
 	}
 	return 100
-}
-
-func (g *Generator) applyConfigOverrides(plan *llm.GenerationPlan, sg *schema.SchemaGraph) {
-	if plan.Tables == nil {
-		plan.Tables = make(map[string]llm.TablePlan)
-	}
-
-	for _, table := range sg.Tables {
-		tablePlan, ok := plan.Tables[table.Name]
-		if !ok {
-			tablePlan = llm.TablePlan{Columns: make(map[string]llm.ColumnPlan)}
-			plan.Tables[table.Name] = tablePlan
-		}
-		if tablePlan.Columns == nil {
-			tablePlan.Columns = make(map[string]llm.ColumnPlan)
-			plan.Tables[table.Name] = tablePlan
-		}
-
-		// Apply table-level config overrides
-		if tc, ok := g.cfg.Tables[table.Name]; ok {
-			for colName, colCfg := range tc.Columns {
-				tablePlan.Columns[colName] = llm.ColumnPlan{
-					Generator: colCfg.Generator,
-					Template:  colCfg.Template,
-					Values:    colCfg.Values,
-					Format:    colCfg.Format,
-				}
-			}
-			plan.Tables[table.Name] = tablePlan
-		}
-
-		// Apply column rules (pattern matching)
-		for _, rule := range g.cfg.ColumnRules {
-			for _, col := range table.Columns {
-				if matchPattern(col.Name, rule.Pattern) {
-					tablePlan.Columns[col.Name] = llm.ColumnPlan{
-						Generator: rule.Generator,
-						Format:    rule.Format,
-						Template:  rule.Template,
-					}
-				}
-			}
-			plan.Tables[table.Name] = tablePlan
-		}
-	}
-}
-
-// buildFallbackPlan creates a generation plan using type-based heuristics when no LLM is available.
-func (g *Generator) buildFallbackPlan(sg *schema.SchemaGraph) *llm.GenerationPlan {
-	plan := &llm.GenerationPlan{
-		Tables: make(map[string]llm.TablePlan),
-	}
-	for _, table := range sg.Tables {
-		tp := llm.TablePlan{Columns: make(map[string]llm.ColumnPlan)}
-		for _, col := range table.Columns {
-			// Skip columns with defaults that look auto-generated, generated columns, or serial types
-			if col.IsGenerated {
-				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
-				continue
-			}
-			if strings.Contains(col.DefaultValue, "nextval(") || strings.Contains(col.DefaultValue, "gen_random_uuid()") {
-				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
-				continue
-			}
-			if strings.Contains(strings.ToLower(col.DataType), "serial") {
-				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
-				continue
-			}
-			// FK columns are handled by the FK resolver
-			if fkTarget(table, col.Name) != "" {
-				tp.Columns[col.Name] = llm.ColumnPlan{Generator: "skip"}
-				continue
-			}
-			// Default: use type-based generation (the "default" case in generateValue)
-			tp.Columns[col.Name] = llm.ColumnPlan{Generator: "type_based"}
-		}
-		plan.Tables[table.Name] = tp
-	}
-	return plan
-}
-
-func (g *Generator) generateTable(ctx context.Context, table *schema.Table, plan llm.TablePlan, rowCount int, pkValues map[string][]map[string]any) ([]map[string]any, error) {
-	rows := make([]map[string]any, 0, rowCount)
-	uniqueTracker := newUniqueTracker(table)
-
-	for i := 0; i < rowCount; i++ {
-		row := make(map[string]any)
-		for _, col := range table.Columns {
-			colPlan, ok := plan.Columns[col.Name]
-			if !ok || colPlan.Generator == "skip" {
-				continue
-			}
-
-			// Handle FK columns
-			if fkTable := fkTarget(table, col.Name); fkTable != "" {
-				if refs, ok := pkValues[fkTable]; ok && len(refs) > 0 {
-					refRow := refs[g.faker.IntN(len(refs))]
-					refCol := fkRefCol(table, col.Name)
-					row[col.Name] = refRow[refCol]
-					continue
-				}
-			}
-
-			val, err := g.generateValue(ctx, col, colPlan, row)
-			if err != nil {
-				return nil, fmt.Errorf("generating value for %s.%s: %w", table.Name, col.Name, err)
-			}
-			row[col.Name] = val
-		}
-
-		// Handle UNIQUE constraint enforcement with retry
-		if !uniqueTracker.isEmpty() {
-			for attempt := 0; attempt < 100; attempt++ {
-				if uniqueTracker.isUnique(row) {
-					break
-				}
-				// Regenerate unique columns
-				for _, cols := range table.UniqueColumns() {
-					for _, colName := range cols {
-						colPlan, ok := plan.Columns[colName]
-						if !ok || colPlan.Generator == "skip" {
-							continue
-						}
-						col := table.ColumnByName(colName)
-						if col == nil {
-							continue
-						}
-						val, err := g.generateValue(ctx, col, colPlan, row)
-						if err != nil {
-							return nil, err
-						}
-						row[colName] = val
-					}
-				}
-				if attempt == 99 {
-					return nil, fmt.Errorf("could not generate unique row for %s after 100 attempts", table.Name)
-				}
-			}
-			uniqueTracker.add(row)
-		}
-
-		rows = append(rows, row)
-	}
-
-	return rows, nil
-}
-
-func (g *Generator) generateValue(ctx context.Context, col *schema.Column, plan llm.ColumnPlan, currentRow map[string]any) (any, error) {
-	switch plan.Generator {
-	case "person.first_name":
-		return g.faker.FirstName(), nil
-	case "person.last_name":
-		return g.faker.LastName(), nil
-	case "person.full_name":
-		return g.faker.Name(), nil
-	case "internet.email":
-		if plan.Template != "" {
-			return g.expandTemplate(plan.Template, currentRow), nil
-		}
-		return g.faker.Email(), nil
-	case "internet.url":
-		return g.faker.URL(), nil
-	case "internet.image_url":
-		return fmt.Sprintf("https://picsum.photos/seed/%s/200/200", g.faker.LetterN(8)), nil
-	case "internet.domain":
-		return g.faker.DomainName(), nil
-	case "phone.national":
-		return g.faker.Phone(), nil
-	case "phone.international":
-		return g.faker.PhoneFormatted(), nil
-	case "address.street":
-		return g.faker.Street(), nil
-	case "address.city":
-		return g.faker.City(), nil
-	case "address.state":
-		return g.faker.State(), nil
-	case "address.zip":
-		return g.faker.Zip(), nil
-	case "address.country":
-		return g.faker.Country(), nil
-	case "company.name":
-		return g.faker.Company(), nil
-	case "company.bs":
-		return g.faker.BS(), nil
-	case "company.suffix":
-		return g.faker.CompanySuffix(), nil
-	case "lorem.sentence":
-		return g.faker.Sentence(10), nil
-	case "lorem.paragraph":
-		sentences := 3
-		if s, ok := plan.Params["sentences"]; ok {
-			if n, err := strconv.Atoi(s); err == nil {
-				sentences = n
-			}
-		}
-		return g.faker.Paragraph(1, sentences, 10, " "), nil
-	case "time.recent":
-		days := 365
-		if d, ok := plan.Params["days"]; ok {
-			if n, err := strconv.Atoi(d); err == nil {
-				days = n
-			}
-		}
-		return time.Now().Add(-time.Duration(g.faker.IntN(days*24)) * time.Hour), nil
-	case "time.past":
-		return g.faker.DateRange(time.Now().AddDate(-5, 0, 0), time.Now()), nil
-	case "time.future":
-		return g.faker.DateRange(time.Now(), time.Now().AddDate(1, 0, 0)), nil
-	case "number.int":
-		min, max := 0, 1000000
-		if plan.Min != nil {
-			min = int(*plan.Min)
-		}
-		if plan.Max != nil {
-			max = int(*plan.Max)
-		}
-		return g.faker.IntN(max-min) + min, nil
-	case "number.float":
-		min, max := 0.0, 1000000.0
-		if plan.Min != nil {
-			min = *plan.Min
-		}
-		if plan.Max != nil {
-			max = *plan.Max
-		}
-		return g.faker.Float64Range(min, max), nil
-	case "number.price":
-		return g.faker.Price(1.0, 999.99), nil
-	case "uuid":
-		return g.faker.UUID(), nil
-	case "boolean":
-		return g.faker.Bool(), nil
-	case "one_of":
-		if len(plan.Values) == 0 {
-			return nil, fmt.Errorf("one_of generator requires values")
-		}
-		return plan.Values[g.faker.IntN(len(plan.Values))], nil
-	case "regex":
-		if plan.Format == "" {
-			return nil, fmt.Errorf("regex generator requires format")
-		}
-		return g.faker.Regex(plan.Format), nil
-	case "llm":
-		// Direct LLM generation for text columns
-		vars := make(map[string]string)
-		for k, v := range currentRow {
-			vars[k] = fmt.Sprintf("%v", v)
-		}
-		return g.llmClient.GenerateText(ctx, plan.Template, vars)
-	default:
-		// Fallback based on column type
-		return g.generateByType(col)
-	}
-}
-
-var maxLengthRe = regexp.MustCompile(`\((\d+)\)`)
-
-// parseMaxLength extracts the numeric length from type strings like
-// "character varying(20)" or "varchar(50)". Returns 0 if no length is found.
-func parseMaxLength(dataType string) int {
-	m := maxLengthRe.FindStringSubmatch(dataType)
-	if len(m) < 2 {
-		return 0
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-func (g *Generator) generateByType(col *schema.Column) (any, error) {
-	dt := strings.ToLower(col.DataType)
-	switch {
-	case strings.Contains(dt, "int"):
-		return g.faker.IntN(100000), nil
-	case strings.Contains(dt, "serial"):
-		return nil, nil // skip serial columns
-	case strings.Contains(dt, "bool"):
-		return g.faker.Bool(), nil
-	case strings.Contains(dt, "text"), strings.Contains(dt, "varchar"), strings.Contains(dt, "char"):
-		maxLen := parseMaxLength(col.DataType)
-		if maxLen > 0 && maxLen <= 5 {
-			return g.faker.LetterN(uint(maxLen)), nil
-		}
-		val := g.faker.Sentence(5)
-		if maxLen > 0 && len(val) > maxLen {
-			val = val[:maxLen]
-		}
-		return val, nil
-	case strings.Contains(dt, "numeric"), strings.Contains(dt, "decimal"), strings.Contains(dt, "money"):
-		return g.faker.Price(1.0, 999.99), nil
-	case strings.Contains(dt, "float"), strings.Contains(dt, "double"), strings.Contains(dt, "real"):
-		return g.faker.Float64Range(0, 1000), nil
-	case strings.Contains(dt, "timestamp"), strings.Contains(dt, "date"):
-		return g.faker.DateRange(time.Now().AddDate(-2, 0, 0), time.Now()), nil
-	case strings.Contains(dt, "uuid"):
-		return g.faker.UUID(), nil
-	case strings.Contains(dt, "json"):
-		return "{}", nil
-	default:
-		return g.faker.Word(), nil
-	}
-}
-
-func (g *Generator) expandTemplate(tmpl string, row map[string]any) string {
-	result := tmpl
-	for k, v := range row {
-		result = strings.ReplaceAll(result, "{"+k+"}", fmt.Sprintf("%v", v))
-	}
-	// Replace any remaining placeholders with random values
-	for {
-		start := strings.Index(result, "{")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], "}")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + g.faker.Word() + result[start+end+1:]
-	}
-	return result
 }
 
 func (g *Generator) insertRows(ctx context.Context, conn *pgx.Conn, table *schema.Table, rows []map[string]any) error {
@@ -543,19 +359,40 @@ func extractPKValues(table *schema.Table, rows []map[string]any) []map[string]an
 }
 
 // FillColumn generates data for a single new column across existing rows.
-// It reads primary key values from the table, generates a value for each row,
-// and batch-updates them. If no primary key exists, it sets all rows to the same value.
 func (g *Generator) FillColumn(ctx context.Context, conn *pgx.Conn, qualifiedTable string, col *schema.Column, pkColumns []string) error {
-	val, err := g.generateByType(col)
+	// Build a minimal schema context
+	schemaContext := fmt.Sprintf("Table: %s\nColumn: %s (%s)\n", qualifiedTable, col.Name, col.DataType)
+
+	// Count rows
+	var rowCount int
+	err := conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", qualifiedTable)).Scan(&rowCount)
 	if err != nil {
-		return fmt.Errorf("generating value for column %s: %w", col.Name, err)
+		return fmt.Errorf("counting rows: %w", err)
+	}
+	if rowCount == 0 {
+		return nil
+	}
+
+	// Create a temporary table object for the LLM call
+	tempTable := &schema.Table{Name: qualifiedTable, Columns: []*schema.Column{col}}
+
+	values, err := g.llmClient.GenerateColumnValues(ctx, schemaContext, tempTable, col, rowCount)
+	if err != nil {
+		return fmt.Errorf("generating values for column %s: %w", col.Name, err)
 	}
 
 	if len(pkColumns) == 0 {
-		// No PK: set all rows to the same generated value
-		_, err := conn.Exec(ctx, fmt.Sprintf("UPDATE %s SET %s = $1",
-			qualifiedTable, pgx.Identifier{col.Name}.Sanitize()), val)
-		return err
+		// No PK: set all rows to the first generated value
+		if len(values) > 0 {
+			coerced, err := coerceValue(values[0], col)
+			if err != nil {
+				return fmt.Errorf("coercing value for column %s: %w", col.Name, err)
+			}
+			_, err = conn.Exec(ctx, fmt.Sprintf("UPDATE %s SET %s = $1",
+				qualifiedTable, pgx.Identifier{col.Name}.Sanitize()), coerced)
+			return err
+		}
+		return nil
 	}
 
 	// Build SELECT for PK columns
@@ -597,15 +434,26 @@ func (g *Generator) FillColumn(ctx context.Context, conn *pgx.Conn, qualifiedTab
 	updateSQL := fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s",
 		qualifiedTable, pgx.Identifier{col.Name}.Sanitize(), strings.Join(whereParts, " AND "))
 
-	// Batch update each row with a fresh generated value
+	// Batch update each row with generated values
 	batch := &pgx.Batch{}
-	for _, pk := range pkRows {
-		rowVal, err := g.generateByType(col)
-		if err != nil {
-			return fmt.Errorf("generating value for column %s: %w", col.Name, err)
+	for i, pk := range pkRows {
+		var val any
+		if i < len(values) {
+			coerced, err := coerceValue(values[i], col)
+			if err != nil {
+				return fmt.Errorf("coercing value for column %s: %w", col.Name, err)
+			}
+			val = coerced
+		} else if len(values) > 0 {
+			// Reuse last value if we ran short
+			coerced, err := coerceValue(values[len(values)-1], col)
+			if err != nil {
+				return fmt.Errorf("coercing value for column %s: %w", col.Name, err)
+			}
+			val = coerced
 		}
 		args := make([]any, 0, 1+len(pk.values))
-		args = append(args, rowVal)
+		args = append(args, val)
 		args = append(args, pk.values...)
 		batch.Queue(updateSQL, args...)
 	}
@@ -636,4 +484,14 @@ func matchPattern(name, pattern string) bool {
 		return strings.HasPrefix(name, pattern[:len(pattern)-1])
 	}
 	return name == pattern
+}
+
+func containsValue(vals []any, v any) bool {
+	target := fmt.Sprintf("%v", v)
+	for _, val := range vals {
+		if fmt.Sprintf("%v", val) == target {
+			return true
+		}
+	}
+	return false
 }

@@ -6,32 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
-
-// GenerationPlan describes how to generate data for each column.
-type GenerationPlan struct {
-	Tables map[string]TablePlan `json:"tables"`
-}
-
-// TablePlan describes generation for a single table.
-type TablePlan struct {
-	Columns map[string]ColumnPlan `json:"columns"`
-}
-
-// ColumnPlan describes how to generate data for a single column.
-type ColumnPlan struct {
-	Generator string            `json:"generator"`
-	Template  string            `json:"template,omitempty"`
-	Values    []string          `json:"values,omitempty"`
-	Format    string            `json:"format,omitempty"`
-	Min       *float64          `json:"min,omitempty"`
-	Max       *float64          `json:"max,omitempty"`
-	Params    map[string]string `json:"params,omitempty"`
-}
 
 // Client communicates with an OpenAI-compatible LLM API.
 type Client struct {
@@ -39,13 +17,13 @@ type Client struct {
 	model  string
 }
 
-// NewClient creates an LLM client from the given config.
-func NewClient(cfg config.LLMConfig) *Client {
+// NewClient creates an LLM client from the given base URL, model, and optional API key.
+func NewClient(baseURL, model, apiKey string) *Client {
 	opts := []option.RequestOption{
-		option.WithBaseURL(cfg.BaseURL),
+		option.WithBaseURL(baseURL),
 	}
-	if cfg.APIKey != "" {
-		opts = append(opts, option.WithAPIKey(cfg.APIKey))
+	if apiKey != "" {
+		opts = append(opts, option.WithAPIKey(apiKey))
 	} else {
 		// Ollama doesn't need an API key, but the SDK requires one
 		opts = append(opts, option.WithAPIKey("ollama"))
@@ -53,61 +31,66 @@ func NewClient(cfg config.LLMConfig) *Client {
 
 	return &Client{
 		openai: openai.NewClient(opts...),
-		model:  cfg.Model,
+		model:  model,
 	}
 }
 
-const analyzePrompt = `You are a database expert. Given a database schema, produce a JSON generation plan that maps each column to an appropriate fake data generator.
+// TableDataRequest describes what data to generate for a single table.
+type TableDataRequest struct {
+	SchemaContext      string // from FormatForLLM()
+	Table              *schema.Table
+	RowCount           int
+	FKValues           map[string][]any  // colName -> valid FK values
+	ColumnInstructions map[string]string // colName -> constraint text from config
+	SkipColumns        []string          // auto-generated, serial, FK columns
+	UniqueColumns      [][]string        // unique index column groups
+	PreviousRows       []map[string]any  // for multi-chunk consistency
+}
 
-Available generators:
-- "person.first_name", "person.last_name", "person.full_name" — name generators
-- "internet.email" — email addresses (supports "template" field like "{first_name}.{last_name}@example.com")
-- "internet.url", "internet.image_url", "internet.domain" — URL generators
-- "phone.national", "phone.international" — phone numbers
-- "address.street", "address.city", "address.state", "address.zip", "address.country" — address parts
-- "company.name", "company.bs", "company.suffix" — company data
-- "lorem.sentence", "lorem.paragraph" — text generators (supports "params": {"sentences": "3"})
-- "time.recent" — recent timestamps (supports "params": {"days": "365"})
-- "time.past", "time.future" — timestamp generators
-- "number.int" — integer (supports "min" and "max")
-- "number.float" — float (supports "min" and "max")
-- "number.price" — price values
-- "uuid" — UUID v4
-- "boolean" — true/false
-- "one_of" — random selection from "values" list
-- "regex" — matches a pattern in "format" field
-- "sequence" — auto-incrementing integer (for serial/identity columns)
-- "skip" — skip this column (has a default value or is generated)
+const chunkSize = 50
 
-For each table and column, choose the most semantically appropriate generator based on the column name, type, and any constraints.
+// GenerateTableData generates rows for a table via LLM, chunking if needed.
+func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([]map[string]any, error) {
+	if req.RowCount <= chunkSize {
+		return c.generateChunk(ctx, req, req.RowCount)
+	}
 
-IMPORTANT:
-- Columns with DEFAULT values that look auto-generated (sequences, now(), gen_random_uuid()) should use "skip"
-- Serial/identity/auto-increment columns should use "skip"
-- For columns with CHECK constraints limiting values, use "one_of" with the allowed values
-- Foreign key columns should use "skip" (they'll be filled by the FK resolver)
-- Consider column names semantically: "email" → internet.email, "first_name" → person.first_name, etc.
+	var allRows []map[string]any
+	remaining := req.RowCount
+	for remaining > 0 {
+		batchSize := chunkSize
+		if remaining < batchSize {
+			batchSize = remaining
+		}
 
-Return ONLY valid JSON with this structure:
-{
-  "tables": {
-    "table_name": {
-      "columns": {
-        "column_name": {"generator": "...", ...}
-      }
-    }
-  }
-}`
+		// Include sample of previous rows for consistency
+		if len(allRows) > 0 {
+			sampleSize := 5
+			if len(allRows) < sampleSize {
+				sampleSize = len(allRows)
+			}
+			req.PreviousRows = allRows[len(allRows)-sampleSize:]
+		}
 
-// AnalyzeSchema sends the schema to the LLM and gets back a generation plan.
-func (c *Client) AnalyzeSchema(ctx context.Context, sg *schema.SchemaGraph) (*GenerationPlan, error) {
-	schemaText := sg.FormatForLLM()
+		rows, err := c.generateChunk(ctx, req, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		allRows = append(allRows, rows...)
+		remaining -= batchSize
+	}
+
+	return allRows, nil
+}
+
+func (c *Client) generateChunk(ctx context.Context, req TableDataRequest, count int) ([]map[string]any, error) {
+	prompt := buildPrompt(req, count)
 
 	resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(analyzePrompt),
-			openai.UserMessage("Here is the database schema:\n\n" + schemaText),
+			openai.SystemMessage("You are generating realistic test data for a PostgreSQL database. Return ONLY a JSON array of row objects. No explanation, no markdown formatting."),
+			openai.UserMessage(prompt),
 		},
 	})
 	if err != nil {
@@ -118,54 +101,169 @@ func (c *Client) AnalyzeSchema(ctx context.Context, sg *schema.SchemaGraph) (*Ge
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
-	content := resp.Choices[0].Message.Content
-	plan, err := parseGenerationPlan(content)
-	if err != nil {
-		return nil, fmt.Errorf("parsing LLM response: %w", err)
+	content := fixJSON(stripCodeBlock(resp.Choices[0].Message.Content))
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(content), &rows); err != nil {
+		return nil, fmt.Errorf("parsing LLM response as JSON array: %w\nContent: %s", err, content)
 	}
 
-	return plan, nil
+	return rows, nil
 }
 
-// GenerateText generates a single text value using the LLM.
-func (c *Client) GenerateText(ctx context.Context, prompt string, vars map[string]string) (string, error) {
-	// Substitute variables in the prompt
-	expandedPrompt := prompt
-	for k, v := range vars {
-		expandedPrompt = replaceVar(expandedPrompt, k, v)
+func buildPrompt(req TableDataRequest, count int) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "Database schema context:\n%s\n", req.SchemaContext)
+	fmt.Fprintf(&b, "Generate %d rows for table %q.\n\n", count, req.Table.Name)
+
+	// List columns to generate with types
+	skipSet := make(map[string]bool)
+	for _, s := range req.SkipColumns {
+		skipSet[s] = true
 	}
+
+	fmt.Fprintf(&b, "Columns to generate:\n")
+	for _, col := range req.Table.Columns {
+		if skipSet[col.Name] {
+			continue
+		}
+		nullable := ""
+		if col.IsNullable {
+			nullable = " (nullable)"
+		}
+		fmt.Fprintf(&b, "- %s: %s%s\n", col.Name, col.DataType, nullable)
+	}
+	b.WriteString("\n")
+
+	// FK value constraints
+	if len(req.FKValues) > 0 {
+		fmt.Fprintf(&b, "Foreign key values (you MUST pick from these lists):\n")
+		for col, vals := range req.FKValues {
+			strs := make([]string, len(vals))
+			for i, v := range vals {
+				strs[i] = fmt.Sprintf("%v", v)
+			}
+			// Limit display to 50 values
+			display := strs
+			if len(display) > 50 {
+				display = display[:50]
+			}
+			fmt.Fprintf(&b, "- %s: [%s]\n", col, strings.Join(display, ", "))
+		}
+		b.WriteString("\n")
+	}
+
+	// Unique constraints
+	if len(req.UniqueColumns) > 0 {
+		fmt.Fprintf(&b, "Unique constraints (values must be unique across all rows):\n")
+		for _, cols := range req.UniqueColumns {
+			fmt.Fprintf(&b, "- UNIQUE(%s)\n", strings.Join(cols, ", "))
+		}
+		b.WriteString("\n")
+	}
+
+	// Check constraints
+	if len(req.Table.Checks) > 0 {
+		fmt.Fprintf(&b, "Check constraints:\n")
+		for _, ck := range req.Table.Checks {
+			fmt.Fprintf(&b, "- %s\n", ck.Expression)
+		}
+		b.WriteString("\n")
+	}
+
+	// Config instructions
+	if len(req.ColumnInstructions) > 0 {
+		fmt.Fprintf(&b, "Column instructions:\n")
+		for col, instr := range req.ColumnInstructions {
+			fmt.Fprintf(&b, "- %s: %s\n", col, instr)
+		}
+		b.WriteString("\n")
+	}
+
+	// Previous rows for consistency
+	if len(req.PreviousRows) > 0 {
+		sample, _ := json.Marshal(req.PreviousRows)
+		fmt.Fprintf(&b, "Previous rows (maintain consistency in style and values):\n%s\n\n", string(sample))
+	}
+
+	fmt.Fprintf(&b, "Return ONLY a JSON array of %d row objects. Each object should have keys matching the column names above. Respect data types and constraints. Generate realistic, semantically coherent data.", count)
+
+	return b.String()
+}
+
+// GenerateColumnValues generates values for a single column across multiple rows.
+func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string, table *schema.Table, col *schema.Column, count int) ([]any, error) {
+	prompt := fmt.Sprintf(
+		"Database schema context:\n%s\nGenerate %d realistic values for column %q (type: %s) in table %q.\nReturn ONLY a JSON array of values. No explanation.",
+		schemaContext, count, col.Name, col.DataType, table.Name,
+	)
 
 	resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage("Generate exactly one value. Return only the value, no explanation or formatting."),
-			openai.UserMessage(expandedPrompt),
+			openai.SystemMessage("You are generating realistic test data for a PostgreSQL database. Return ONLY a JSON array of values."),
+			openai.UserMessage(prompt),
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("LLM text generation failed: %w", err)
+		return nil, fmt.Errorf("LLM API call failed: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("LLM returned no choices")
+		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
-	return resp.Choices[0].Message.Content, nil
-}
+	content := fixJSON(stripCodeBlock(resp.Choices[0].Message.Content))
 
-func replaceVar(s, key, value string) string {
-	return strings.ReplaceAll(s, "{"+key+"}", value)
-}
-
-func parseGenerationPlan(content string) (*GenerationPlan, error) {
-	// The LLM might wrap JSON in markdown code blocks
-	content = stripCodeBlock(content)
-
-	var plan GenerationPlan
-	if err := json.Unmarshal([]byte(content), &plan); err != nil {
-		return nil, fmt.Errorf("invalid JSON from LLM: %w\nContent: %s", err, content)
+	var values []any
+	if err := json.Unmarshal([]byte(content), &values); err != nil {
+		return nil, fmt.Errorf("parsing LLM response: %w\nContent: %s", err, content)
 	}
-	return &plan, nil
+
+	return values, nil
+}
+
+// fixJSON attempts to fix common LLM JSON issues, such as single-quoted strings.
+func fixJSON(s string) string {
+	// If it already parses, return as-is
+	if json.Valid([]byte(s)) {
+		return s
+	}
+
+	// Replace single-quoted strings with double-quoted strings.
+	// This handles the common case where LLMs return Python-style dicts.
+	var b strings.Builder
+	inDouble := false
+	inSingle := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case ch == '\\' && i+1 < len(s) && (inDouble || inSingle):
+			b.WriteByte(ch)
+			i++
+			b.WriteByte(s[i])
+		case ch == '"' && !inSingle:
+			inDouble = !inDouble
+			b.WriteByte(ch)
+		case ch == '\'' && !inDouble:
+			inSingle = !inSingle
+			b.WriteByte('"')
+		case ch == '"' && inSingle:
+			// Escape double quotes inside what was a single-quoted string
+			b.WriteString(`\"`)
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	result := b.String()
+	// Also replace Python True/False/None with JSON equivalents
+	result = strings.ReplaceAll(result, ": True", ": true")
+	result = strings.ReplaceAll(result, ": False", ": false")
+	result = strings.ReplaceAll(result, ": None", ": null")
+
+	return result
 }
 
 func stripCodeBlock(s string) string {

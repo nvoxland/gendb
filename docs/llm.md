@@ -4,13 +4,7 @@ GenDB uses an LLM to analyze your database schema and produce a generation plan 
 
 ## How GenDB Uses LLMs
 
-Generation happens in two phases:
-
-1. **Schema analysis** — GenDB sends your schema (table names, column names, data types, constraints) to the LLM. The LLM returns a JSON generation plan mapping each column to a [generator](generators.md) based on semantic understanding of column names and types.
-
-2. **Data generation** — GenDB executes the plan using fast, local generators (powered by [gofakeit](https://github.com/brianvoe/gofakeit)). The LLM is **not** called per-row — it only chooses the generators.
-
-The exception is columns configured with `generator: llm`, which call the LLM to generate each value individually. See [Direct LLM Generation](#direct-llm-generation) below.
+The LLM generates all data values directly. GenDB sends your schema (table names, column names, data types, constraints, foreign key relationships) to the LLM, which returns realistic, semantically coherent data as JSON. Data is generated in batches per table (up to 50 rows per LLM call), with larger tables chunked automatically.
 
 ## Ollama (Local)
 
@@ -65,9 +59,9 @@ llm:
   api_key: ""  # if required by your endpoint
 ```
 
-## Direct LLM Generation
+## Column Instructions
 
-For text columns that need rich, contextual content, you can use the `llm` generator to call the LLM for each row:
+You can provide per-column instructions in `gendb.yaml` to guide the LLM:
 
 ```yaml
 generation:
@@ -75,24 +69,18 @@ generation:
     users:
       columns:
         bio:
-          generator: llm
           prompt: "Write a short professional bio"
-        review:
-          generator: llm
-          prompt: "Write a product review for a {category} item"
+        status:
+          generator: one_of
+          values: [active, inactive, pending]
 ```
 
-The prompt can reference other columns in the same row using `{column_name}` placeholders. These are substituted with already-generated values before sending to the LLM.
-
-!!! warning
-    Direct LLM generation calls the LLM once per row per column. For large tables this can be slow and costly. Use it selectively for columns that truly need natural language content.
+These instructions are included in the LLM prompt alongside the schema context.
 
 ## Cost Profile
 
 | Operation | LLM calls | Typical cost (OpenAI) |
 |-----------|-----------|----------------------|
-| Schema analysis | 1 per `generate_data` | ~$0.01 |
-| Data generation (default) | 0 | Free |
-| `generator: llm` columns | 1 per row per column | Varies |
+| Data generation | 1 per 50 rows per table | ~$0.01-0.05 per table |
 
 With Ollama, all operations are free and local.

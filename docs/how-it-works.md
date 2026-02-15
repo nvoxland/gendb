@@ -44,38 +44,11 @@ GenDB introspects your real database to understand its structure:
 
 3. **Schema exclusion** — During introspection, the shadow schema is excluded so shadow tables don't appear as "real" tables.
 
-## Two-Phase Generation
+## LLM-Based Data Generation
 
-Data generation happens in two phases:
+GenDB sends your schema to the configured LLM, which generates all data values directly as JSON. The LLM produces realistic, semantically coherent rows based on column names, types, and constraints. Data is generated in batches of up to 50 rows per LLM call.
 
-### Phase 1: LLM Schema Analysis
-
-GenDB sends your schema to the configured LLM with a prompt that describes all available [generators](generators.md). The LLM returns a JSON generation plan:
-
-```json
-{
-  "tables": {
-    "users": {
-      "columns": {
-        "id": {"generator": "skip"},
-        "first_name": {"generator": "person.first_name"},
-        "last_name": {"generator": "person.last_name"},
-        "email": {"generator": "internet.email",
-                  "template": "{first_name}.{last_name}@example.com"},
-        "created_at": {"generator": "time.recent", "params": {"days": "365"}}
-      }
-    }
-  }
-}
-```
-
-The LLM understands column semantics — it knows that `first_name` should use `person.first_name`, not a random string.
-
-### Phase 2: Local Generation
-
-The generation plan is executed locally using [gofakeit](https://github.com/brianvoe/gofakeit). No LLM calls are made during this phase (unless a column uses `generator: llm`). This makes generation fast and free.
-
-Config overrides (from `gendb.yaml` table/column settings and column rules) are applied on top of the LLM's plan before execution.
+Config overrides (from `gendb.yaml` table/column settings and column rules) are included as instructions in the LLM prompt.
 
 ## Topological Ordering
 

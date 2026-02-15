@@ -7,11 +7,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	configFile string
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "gendb",
 	Short: "GenDB — synthetic database for development & testing",
 	Long: `GenDB creates a shadow PostgreSQL database with LLM-analyzed synthetic data.
 Developers can work against realistic data without production PII.`,
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "gendb.yaml", "Path to config file")
 }
 
 func main() {

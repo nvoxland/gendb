@@ -1,5 +1,30 @@
 package config
 
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Load reads a YAML config file and returns the parsed Config.
+// If the file does not exist, it returns the default config.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DefaultConfig(), nil
+		}
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	cfg := DefaultConfig()
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parsing config file: %w", err)
+	}
+	return cfg, nil
+}
+
 // Config holds the GenDB configuration.
 type Config struct {
 	LLM        LLMConfig        `yaml:"llm"`
