@@ -20,11 +20,15 @@ func (c *Command) NeedsConn() bool {
 type ParamDef struct {
 	Name     string
 	Required bool
+	SQLType  string // e.g. "text", "integer", "bigint" — defaults to "text"
+	Default  string // SQL default literal, e.g. "'default'", "NULL", "100"
+	Comment  string // for COMMENT ON PROCEDURE
 }
 
 // CommandDef is the registry entry for a GenDB command.
 type CommandDef struct {
 	Name      string
+	Comment   string // procedure-level comment
 	Params    []ParamDef
 	NeedsConn bool
 	Handler   HandlerFunc

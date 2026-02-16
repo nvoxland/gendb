@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,13 +15,12 @@ import (
 
 // Proxy is a PostgreSQL wire protocol proxy.
 type Proxy struct {
-	listenAddr  string
-	realAddr    string
-	listener    net.Listener
-	ready       chan struct{}
-	mu          sync.Mutex
-	sessions    map[net.Conn]*session
-	schemaReady atomic.Bool
+	listenAddr string
+	realAddr   string
+	listener   net.Listener
+	ready      chan struct{}
+	mu         sync.Mutex
+	sessions   map[net.Conn]*session
 }
 
 type session struct {
@@ -175,14 +173,11 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	}
 	slog.Debug("Client authenticated successfully", "user", sess.startupParams["user"])
 
-	// On first successful connection, create stub procedures for intellisense
-	if !p.schemaReady.Load() {
-		if err := ensureGenDBSchema(backendConn); err != nil {
-			slog.Warn("Could not create gendb schema stubs", "error", err)
-		} else {
-			slog.Info("Created gendb schema stubs for intellisense")
-			p.schemaReady.Store(true)
-		}
+	// Recreate stub procedures on every connection so signatures stay current
+	if err := ensureGenDBSchema(backendConn); err != nil {
+		slog.Warn("Could not create gendb schema stubs", "error", err)
+	} else {
+		slog.Debug("Created gendb schema stubs for intellisense")
 	}
 
 	// Main loop: intercept GENDB commands, relay everything else

@@ -33,7 +33,7 @@ func ReconstructDDLForSchemaWithMapping(sg *SchemaGraph, targetSchema string, ma
 	for _, t := range sg.Tables {
 		mappedName := mapName(t.Name)
 		qualifiedTable := quoteIdent(targetSchema) + "." + quoteIdent(mappedName)
-		fmt.Fprintf(&b, "CREATE TABLE %s (\n", qualifiedTable)
+		fmt.Fprintf(&b, "CREATE TABLE IF NOT EXISTS %s (\n", qualifiedTable)
 
 		for i, c := range t.Columns {
 			defaultVal := c.DefaultValue
@@ -114,7 +114,7 @@ func ReconstructDDLForSchemaWithMapping(sg *SchemaGraph, targetSchema string, ma
 			if idx.IsUnique {
 				unique = "UNIQUE "
 			}
-			fmt.Fprintf(&b, "CREATE %sINDEX %s ON %s (%s);\n",
+			fmt.Fprintf(&b, "CREATE %sINDEX IF NOT EXISTS %s ON %s (%s);\n",
 				unique, qualifiedIdx, qualifiedTable, strings.Join(cols, ", "))
 		}
 	}
