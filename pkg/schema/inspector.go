@@ -313,38 +313,72 @@ func (i *Inspector) getIndexes(ctx context.Context, t *Table) error {
 	return pkRows.Err()
 }
 
+// FormatTableForLLM returns a schema description limited to the target table
+// and any tables referenced by its foreign keys.
+func (sg *SchemaGraph) FormatTableForLLM(tableName string) string {
+	target := sg.TableByName(tableName)
+	if target == nil {
+		return sg.FormatForLLM()
+	}
+
+	// Collect the target table plus referenced tables
+	relevantTables := []*Table{target}
+	seen := map[string]bool{tableName: true}
+	for _, fk := range target.ForeignKeys {
+		if !seen[fk.ReferencedTable] {
+			if ref := sg.TableByName(fk.ReferencedTable); ref != nil {
+				relevantTables = append(relevantTables, ref)
+				seen[fk.ReferencedTable] = true
+			}
+		}
+	}
+
+	var b strings.Builder
+	for _, t := range relevantTables {
+		b.WriteString(formatTableDescription(t))
+	}
+	return b.String()
+}
+
 // FormatForLLM returns a human-readable schema description for LLM consumption.
 func (sg *SchemaGraph) FormatForLLM() string {
 	var b strings.Builder
 	for _, t := range sg.Tables {
-		fmt.Fprintf(&b, "Table: %s\n", t.Name)
-		fmt.Fprintf(&b, "Columns:\n")
-		for _, c := range t.Columns {
-			nullable := "NOT NULL"
-			if c.IsNullable {
-				nullable = "NULLABLE"
-			}
-			def := ""
-			if c.DefaultValue != "" {
-				def = " DEFAULT " + c.DefaultValue
-			}
-			comment := ""
-			if c.Comment != "" {
-				comment = " -- " + c.Comment
-			}
-			fmt.Fprintf(&b, "  - %s: %s %s%s%s\n", c.Name, c.DataType, nullable, def, comment)
-		}
-		if len(t.PrimaryKey) > 0 {
-			fmt.Fprintf(&b, "Primary Key: (%s)\n", strings.Join(t.PrimaryKey, ", "))
-		}
-		for _, fk := range t.ForeignKeys {
-			fmt.Fprintf(&b, "Foreign Key: (%s) REFERENCES %s(%s)\n",
-				strings.Join(fk.Columns, ", "), fk.ReferencedTable, strings.Join(fk.ReferencedCols, ", "))
-		}
-		for _, ck := range t.Checks {
-			fmt.Fprintf(&b, "Check: %s\n", ck.Expression)
-		}
-		b.WriteString("\n")
+		b.WriteString(formatTableDescription(t))
 	}
+	return b.String()
+}
+
+// formatTableDescription returns a human-readable description of a single table.
+func formatTableDescription(t *Table) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Table: %s\n", t.Name)
+	fmt.Fprintf(&b, "Columns:\n")
+	for _, c := range t.Columns {
+		nullable := "NOT NULL"
+		if c.IsNullable {
+			nullable = "NULLABLE"
+		}
+		def := ""
+		if c.DefaultValue != "" {
+			def = " DEFAULT " + c.DefaultValue
+		}
+		comment := ""
+		if c.Comment != "" {
+			comment = " -- " + c.Comment
+		}
+		fmt.Fprintf(&b, "  - %s: %s %s%s%s\n", c.Name, c.DataType, nullable, def, comment)
+	}
+	if len(t.PrimaryKey) > 0 {
+		fmt.Fprintf(&b, "Primary Key: (%s)\n", strings.Join(t.PrimaryKey, ", "))
+	}
+	for _, fk := range t.ForeignKeys {
+		fmt.Fprintf(&b, "Foreign Key: (%s) REFERENCES %s(%s)\n",
+			strings.Join(fk.Columns, ", "), fk.ReferencedTable, strings.Join(fk.ReferencedCols, ", "))
+	}
+	for _, ck := range t.Checks {
+		fmt.Fprintf(&b, "Check: %s\n", ck.Expression)
+	}
+	b.WriteString("\n")
 	return b.String()
 }

@@ -33,10 +33,13 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	Provider string `yaml:"provider"` // ollama | openai | custom
-	Model    string `yaml:"model"`
-	BaseURL  string `yaml:"base_url"`
-	APIKey   string `yaml:"api_key"`
+	Provider         string   `yaml:"provider"` // ollama | openai | custom
+	Model            string   `yaml:"model"`
+	BaseURL          string   `yaml:"base_url"`
+	APIKey           string   `yaml:"api_key"`
+	Temperature      *float64 `yaml:"temperature,omitempty"`
+	StructuredOutput bool     `yaml:"structured_output"`
+	ChunkSize        int      `yaml:"chunk_size"`
 }
 
 type GenerationConfig struct {

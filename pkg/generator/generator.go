@@ -66,8 +66,6 @@ func New(llmClient *llm.Client, cfg config.GenerationConfig, opts ...Option) (*G
 
 // Generate generates synthetic data for all tables and inserts into the target database.
 func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, targetConn *pgx.Conn) error {
-	schemaContext := sg.FormatForLLM()
-
 	// Track generated PKs for FK resolution
 	pkValues := make(map[string][]map[string]any) // table -> list of PK value maps
 
@@ -83,6 +81,9 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 	for _, table := range sg.Tables {
 		rows := g.rowCount(table.Name)
 		slog.Info("Generating rows via LLM", "table", table.Name, "rows", rows)
+
+		// Build schema context for this table only (plus FK-referenced tables)
+		schemaContext := sg.FormatTableForLLM(table.Name)
 
 		// Identify skip columns
 		skipCols := g.skipColumns(table)
@@ -143,17 +144,68 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 			}
 		}
 
-		// Post-process: enforce uniqueness
+		// Post-process: enforce uniqueness with regeneration
 		uniqueTracker := newUniqueTracker(table)
 		if !uniqueTracker.isEmpty() {
+			var uniqueRows []map[string]any
 			for _, row := range generatedRows {
-				if !uniqueTracker.isUnique(row) {
-					// For duplicates, we just skip adding to tracker
-					// In practice the LLM should generate unique values when instructed
-					continue
+				if uniqueTracker.isUnique(row) {
+					uniqueTracker.add(row)
+					uniqueRows = append(uniqueRows, row)
 				}
-				uniqueTracker.add(row)
 			}
+
+			lost := len(generatedRows) - len(uniqueRows)
+			if lost > 0 {
+				slog.Warn("Rows lost to unique constraint violations, requesting replacements",
+					"table", table.Name, "lost", lost)
+
+				for attempt := 0; attempt < 2 && lost > 0; attempt++ {
+					retryReq := llm.TableDataRequest{
+						SchemaContext:      schemaContext,
+						Table:              table,
+						RowCount:           lost,
+						FKValues:           fkValues,
+						ColumnInstructions: colInstructions,
+						SkipColumns:        skipCols,
+						UniqueColumns:      table.UniqueColumns(),
+						PreviousRows:       uniqueRows,
+					}
+					extraRows, err := g.llmClient.GenerateTableData(ctx, retryReq)
+					if err != nil {
+						slog.Warn("Failed to regenerate rows for unique violations",
+							"table", table.Name, "attempt", attempt, "error", err)
+						break
+					}
+					// Coerce and filter extra rows
+					for i := range extraRows {
+						if err := coerceRow(extraRows[i], table); err != nil {
+							continue
+						}
+						// Validate FK values on extra rows
+						for colName, validVals := range fkValues {
+							if len(validVals) == 0 {
+								continue
+							}
+							if v, ok := extraRows[i][colName]; ok {
+								if !containsValue(validVals, v) {
+									extraRows[i][colName] = validVals[rand.Intn(len(validVals))]
+								}
+							}
+						}
+						if uniqueTracker.isUnique(extraRows[i]) {
+							uniqueTracker.add(extraRows[i])
+							uniqueRows = append(uniqueRows, extraRows[i])
+							lost--
+						}
+					}
+				}
+				if lost > 0 {
+					slog.Warn("Could not fully recover unique rows",
+						"table", table.Name, "still_missing", lost)
+				}
+			}
+			generatedRows = uniqueRows
 		}
 
 		// Remove skip columns from rows (in case LLM included them)

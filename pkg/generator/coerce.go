@@ -3,12 +3,15 @@ package generator
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nvoxland/gendb/pkg/schema"
 )
+
+var varcharLenRegex = regexp.MustCompile(`\((\d+)\)`)
 
 // coerceRow coerces each value in a row map to the appropriate Go type for PostgreSQL insertion.
 func coerceRow(row map[string]any, table *schema.Table) error {
@@ -50,7 +53,17 @@ func coerceValue(v any, col *schema.Column) (any, error) {
 	case strings.Contains(dt, "json"):
 		return fmt.Sprintf("%v", v), nil
 	case strings.Contains(dt, "text") || strings.Contains(dt, "varchar") || strings.Contains(dt, "char"):
-		return fmt.Sprintf("%v", v), nil
+		s := fmt.Sprintf("%v", v)
+		// Truncate to max length for varchar/char types
+		if m := varcharLenRegex.FindStringSubmatch(col.DataType); len(m) == 2 {
+			if maxLen, err := strconv.Atoi(m[1]); err == nil {
+				runes := []rune(s)
+				if len(runes) > maxLen {
+					s = string(runes[:maxLen])
+				}
+			}
+		}
+		return s, nil
 	default:
 		return v, nil
 	}

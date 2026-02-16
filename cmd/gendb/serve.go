@@ -68,7 +68,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	initLogging(level)
 
 	// Create LLM client
-	appLLMClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKey)
+	appLLMClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKey,
+		llm.WithTemperature(cfg.LLM.Temperature),
+		llm.WithStructuredOutput(cfg.LLM.StructuredOutput),
+		llm.WithProvider(cfg.LLM.Provider),
+		llm.WithChunkSize(cfg.LLM.ChunkSize),
+	)
 	slog.Info("LLM configured", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 
 	realAddr := fmt.Sprintf("%s:%d", dbHostname, dbPort)

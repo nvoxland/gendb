@@ -5,35 +5,74 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/shared"
 )
 
 // Client communicates with an OpenAI-compatible LLM API.
 type Client struct {
-	openai openai.Client
-	model  string
+	openai           openai.Client
+	model            string
+	temperature      *float64
+	structuredOutput bool
+	provider         string // "ollama" | "openai" | "custom"
+	chunkSize        int
+}
+
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithTemperature sets the sampling temperature.
+func WithTemperature(t *float64) ClientOption {
+	return func(c *Client) { c.temperature = t }
+}
+
+// WithStructuredOutput enables JSON Schema structured outputs.
+func WithStructuredOutput(enabled bool) ClientOption {
+	return func(c *Client) { c.structuredOutput = enabled }
+}
+
+// WithProvider sets the provider name for compatibility adjustments.
+func WithProvider(provider string) ClientOption {
+	return func(c *Client) { c.provider = provider }
+}
+
+// WithChunkSize sets the number of rows per LLM request.
+func WithChunkSize(size int) ClientOption {
+	return func(c *Client) { c.chunkSize = size }
 }
 
 // NewClient creates an LLM client from the given base URL, model, and optional API key.
-func NewClient(baseURL, model, apiKey string) *Client {
-	opts := []option.RequestOption{
+func NewClient(baseURL, model, apiKey string, opts ...ClientOption) *Client {
+	reqOpts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
 	}
 	if apiKey != "" {
-		opts = append(opts, option.WithAPIKey(apiKey))
+		reqOpts = append(reqOpts, option.WithAPIKey(apiKey))
 	} else {
 		// Ollama doesn't need an API key, but the SDK requires one
-		opts = append(opts, option.WithAPIKey("ollama"))
+		reqOpts = append(reqOpts, option.WithAPIKey("ollama"))
 	}
 
-	return &Client{
-		openai: openai.NewClient(opts...),
-		model:  model,
+	c := &Client{
+		openai:    openai.NewClient(reqOpts...),
+		model:     model,
+		chunkSize: defaultChunkSize,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	if c.chunkSize <= 0 {
+		c.chunkSize = defaultChunkSize
+	}
+	return c
 }
 
 // TableDataRequest describes what data to generate for a single table.
@@ -48,22 +87,23 @@ type TableDataRequest struct {
 	PreviousRows       []map[string]any  // for multi-chunk consistency
 }
 
-const chunkSize = 50
+const defaultChunkSize = 50
 
 // GenerateTableData generates rows for a table via LLM, chunking if needed.
 func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([]map[string]any, error) {
-	if req.RowCount <= chunkSize {
+	cs := c.chunkSize
+	if req.RowCount <= cs {
 		slog.Debug("Requesting LLM data (single chunk)", "table", req.Table.Name, "rows", req.RowCount)
 		return c.generateChunk(ctx, req, req.RowCount)
 	}
 
-	slog.Debug("Requesting LLM data (chunked)", "table", req.Table.Name, "rows", req.RowCount, "chunk_size", chunkSize)
+	slog.Debug("Requesting LLM data (chunked)", "table", req.Table.Name, "rows", req.RowCount, "chunk_size", cs)
 	var allRows []map[string]any
 	remaining := req.RowCount
 	chunk := 0
 	for remaining > 0 {
 		chunk++
-		batchSize := chunkSize
+		batchSize := cs
 		if remaining < batchSize {
 			batchSize = remaining
 		}
@@ -90,38 +130,206 @@ func (c *Client) GenerateTableData(ctx context.Context, req TableDataRequest) ([
 	return allRows, nil
 }
 
+const systemPrompt = `You are a synthetic data generator for a PostgreSQL database.
+
+Guidelines:
+- Return ONLY a valid JSON array of row objects. No explanation, no markdown, no code blocks.
+- Use realistic values: real-sounding names, plausible addresses, valid email formats, sensible dates.
+- Vary the data: avoid repeating the same patterns. Mix lengths, styles, and distributions naturally.
+- Respect all data types exactly. Strings must fit within any specified length limits (e.g., varchar(50) means max 50 characters).
+- Respect all CHECK, UNIQUE, and NOT NULL constraints.
+- For nullable columns, include some null values (roughly 5-15%) unless instructed otherwise.
+- Foreign key columns must use only the provided valid values.
+- Generate semantically coherent rows: related columns within a row should make sense together.`
+
+const maxRetries = 2
+
 func (c *Client) generateChunk(ctx context.Context, req TableDataRequest, count int) ([]map[string]any, error) {
 	prompt := buildPrompt(req, count)
 
-	slog.Debug("Sending LLM request", "model", c.model, "table", req.Table.Name, "requested_rows", count)
-	resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model: c.model,
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage("You are generating realistic test data for a PostgreSQL database. Return ONLY a JSON array of row objects. No explanation, no markdown formatting."),
-			openai.UserMessage(prompt),
-		},
-	})
-	if err != nil {
-		slog.Error("LLM API call failed", "model", c.model, "table", req.Table.Name, "error", err)
-		return nil, fmt.Errorf("LLM API call failed: %w", err)
+	messages := []openai.ChatCompletionMessageParamUnion{
+		openai.SystemMessage(systemPrompt),
+		openai.UserMessage(prompt),
 	}
 
-	if len(resp.Choices) == 0 {
-		slog.Error("LLM returned no choices", "model", c.model, "table", req.Table.Name)
-		return nil, fmt.Errorf("LLM returned no choices")
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			slog.Warn("Retrying LLM request after JSON parse failure", "table", req.Table.Name, "attempt", attempt, "error", lastErr)
+			messages = append(messages, openai.UserMessage(
+				fmt.Sprintf("Your previous response was not valid JSON. Error: %s. Please return ONLY a valid JSON array of %d row objects.", lastErr, count),
+			))
+		}
+
+		slog.Debug("Sending LLM request", "model", c.model, "table", req.Table.Name, "requested_rows", count, "attempt", attempt)
+
+		params := openai.ChatCompletionNewParams{
+			Model:    c.model,
+			Messages: messages,
+		}
+		if c.temperature != nil {
+			params.Temperature = param.NewOpt(*c.temperature)
+		}
+		if c.structuredOutput {
+			params.ResponseFormat = c.buildResponseFormat(req)
+		}
+
+		resp, err := c.openai.Chat.Completions.New(ctx, params)
+		if err != nil {
+			slog.Error("LLM API call failed", "model", c.model, "table", req.Table.Name, "error", err)
+			return nil, fmt.Errorf("LLM API call failed: %w", err)
+		}
+
+		if len(resp.Choices) == 0 {
+			slog.Error("LLM returned no choices", "model", c.model, "table", req.Table.Name)
+			return nil, fmt.Errorf("LLM returned no choices")
+		}
+
+		slog.Debug("LLM response received", "table", req.Table.Name, "response_length", len(resp.Choices[0].Message.Content))
+		content := resp.Choices[0].Message.Content
+
+		rows, parseErr := c.parseResponse(content, c.structuredOutput)
+		if parseErr != nil {
+			lastErr = parseErr
+			// Add the assistant's bad response to conversation for context
+			messages = append(messages, openai.AssistantMessage(content))
+			continue
+		}
+
+		slog.Debug("Parsed LLM response", "table", req.Table.Name, "parsed_rows", len(rows))
+		return rows, nil
 	}
 
-	slog.Debug("LLM response received", "table", req.Table.Name, "response_length", len(resp.Choices[0].Message.Content))
-	content := fixJSON(stripCodeBlock(resp.Choices[0].Message.Content))
+	slog.Error("Failed to parse LLM response after retries", "table", req.Table.Name, "error", lastErr)
+	return nil, fmt.Errorf("parsing LLM response as JSON array after %d retries: %w", maxRetries, lastErr)
+}
 
+// parseResponse parses the LLM response content into rows.
+func (c *Client) parseResponse(content string, structured bool) ([]map[string]any, error) {
+	if structured {
+		// Structured output wraps in {"rows": [...]}
+		var wrapper struct {
+			Rows []map[string]any `json:"rows"`
+		}
+		if err := json.Unmarshal([]byte(content), &wrapper); err != nil {
+			return nil, fmt.Errorf("parsing structured response: %w\nContent: %s", err, content)
+		}
+		return wrapper.Rows, nil
+	}
+
+	cleaned := fixJSON(stripCodeBlock(content))
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(content), &rows); err != nil {
-		slog.Error("Failed to parse LLM response as JSON", "table", req.Table.Name, "error", err)
-		return nil, fmt.Errorf("parsing LLM response as JSON array: %w\nContent: %s", err, content)
+	if err := json.Unmarshal([]byte(cleaned), &rows); err != nil {
+		return nil, fmt.Errorf("parsing response as JSON array: %w\nContent: %s", err, cleaned)
+	}
+	return rows, nil
+}
+
+// buildResponseFormat constructs a JSON Schema response format for structured outputs.
+func (c *Client) buildResponseFormat(req TableDataRequest) openai.ChatCompletionNewParamsResponseFormatUnion {
+	skipSet := make(map[string]bool)
+	for _, s := range req.SkipColumns {
+		skipSet[s] = true
 	}
 
-	slog.Debug("Parsed LLM response", "table", req.Table.Name, "parsed_rows", len(rows))
-	return rows, nil
+	properties := make(map[string]any)
+	var required []string
+	for _, col := range req.Table.Columns {
+		if skipSet[col.Name] {
+			continue
+		}
+		prop := buildColumnSchema(col)
+		properties[col.Name] = prop
+		if !col.IsNullable {
+			required = append(required, col.Name)
+		}
+	}
+	// Also include FK columns
+	for colName := range req.FKValues {
+		if _, exists := properties[colName]; !exists {
+			col := req.Table.ColumnByName(colName)
+			if col != nil {
+				properties[colName] = buildColumnSchema(col)
+				if !col.IsNullable {
+					required = append(required, colName)
+				}
+			}
+		}
+	}
+
+	rowSchema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		rowSchema["required"] = required
+	}
+
+	topSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"rows": map[string]any{
+				"type":  "array",
+				"items": rowSchema,
+			},
+		},
+		"required":             []string{"rows"},
+		"additionalProperties": false,
+	}
+
+	jsonSchema := shared.ResponseFormatJSONSchemaJSONSchemaParam{
+		Name:   "table_rows",
+		Schema: topSchema,
+	}
+	// OpenAI supports strict mode; Ollama does not
+	if c.provider == "openai" {
+		jsonSchema.Strict = param.NewOpt(true)
+	}
+
+	return openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: jsonSchema,
+		},
+	}
+}
+
+var varcharLenRegex = regexp.MustCompile(`\((\d+)\)`)
+
+// buildColumnSchema maps a PostgreSQL column to a JSON Schema type.
+func buildColumnSchema(col *schema.Column) map[string]any {
+	dt := strings.ToLower(col.DataType)
+	prop := make(map[string]any)
+
+	var jsonType string
+	switch {
+	case strings.Contains(dt, "int") || strings.Contains(dt, "serial"):
+		jsonType = "integer"
+	case strings.Contains(dt, "float") || strings.Contains(dt, "double") || strings.Contains(dt, "real") ||
+		strings.Contains(dt, "numeric") || strings.Contains(dt, "decimal"):
+		jsonType = "number"
+	case strings.Contains(dt, "bool"):
+		jsonType = "boolean"
+	default:
+		jsonType = "string"
+	}
+
+	if col.IsNullable {
+		prop["type"] = []string{jsonType, "null"}
+	} else {
+		prop["type"] = jsonType
+	}
+
+	// Add maxLength for varchar types
+	if strings.Contains(dt, "varchar") || strings.Contains(dt, "character varying") {
+		if m := varcharLenRegex.FindStringSubmatch(col.DataType); len(m) == 2 {
+			if maxLen, err := strconv.Atoi(m[1]); err == nil {
+				prop["maxLength"] = maxLen
+			}
+		}
+	}
+
+	return prop
 }
 
 func buildPrompt(req TableDataRequest, count int) string {
@@ -137,6 +345,7 @@ func buildPrompt(req TableDataRequest, count int) string {
 	}
 
 	fmt.Fprintf(&b, "Columns to generate:\n")
+	var exampleCols []*schema.Column
 	for _, col := range req.Table.Columns {
 		if skipSet[col.Name] {
 			continue
@@ -146,8 +355,17 @@ func buildPrompt(req TableDataRequest, count int) string {
 			nullable = " (nullable)"
 		}
 		fmt.Fprintf(&b, "- %s: %s%s\n", col.Name, col.DataType, nullable)
+		exampleCols = append(exampleCols, col)
 	}
 	b.WriteString("\n")
+
+	// Few-shot example row
+	if len(exampleCols) > 0 {
+		fmt.Fprintf(&b, "Example format (generate NEW values, not these):\n")
+		example := buildExampleRow(exampleCols)
+		exampleJSON, _ := json.Marshal([]map[string]any{example})
+		fmt.Fprintf(&b, "%s\n\n", string(exampleJSON))
+	}
 
 	// FK value constraints
 	if len(req.FKValues) > 0 {
@@ -178,7 +396,7 @@ func buildPrompt(req TableDataRequest, count int) string {
 
 	// Check constraints
 	if len(req.Table.Checks) > 0 {
-		fmt.Fprintf(&b, "Check constraints:\n")
+		fmt.Fprintf(&b, "CHECK CONSTRAINTS (rows MUST satisfy ALL of these):\n")
 		for _, ck := range req.Table.Checks {
 			fmt.Fprintf(&b, "- %s\n", ck.Expression)
 		}
@@ -203,6 +421,34 @@ func buildPrompt(req TableDataRequest, count int) string {
 	fmt.Fprintf(&b, "Return ONLY a JSON array of %d row objects. Each object should have keys matching the column names above. Respect data types and constraints. Generate realistic, semantically coherent data.", count)
 
 	return b.String()
+}
+
+// buildExampleRow creates a single example row with type-appropriate placeholder values.
+func buildExampleRow(cols []*schema.Column) map[string]any {
+	row := make(map[string]any)
+	for _, col := range cols {
+		dt := strings.ToLower(col.DataType)
+		switch {
+		case strings.Contains(dt, "int") || strings.Contains(dt, "serial"):
+			row[col.Name] = 1
+		case strings.Contains(dt, "float") || strings.Contains(dt, "double") || strings.Contains(dt, "real") ||
+			strings.Contains(dt, "numeric") || strings.Contains(dt, "decimal"):
+			row[col.Name] = 1.0
+		case strings.Contains(dt, "bool"):
+			row[col.Name] = true
+		case strings.Contains(dt, "timestamp"):
+			row[col.Name] = "2024-01-15T10:30:00Z"
+		case strings.Contains(dt, "date"):
+			row[col.Name] = "2024-01-15"
+		case strings.Contains(dt, "uuid"):
+			row[col.Name] = "550e8400-e29b-41d4-a716-446655440000"
+		case strings.Contains(dt, "json"):
+			row[col.Name] = "{}"
+		default:
+			row[col.Name] = "example_" + col.Name
+		}
+	}
+	return row
 }
 
 // GenerateColumnValues generates values for a single column across multiple rows.
