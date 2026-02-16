@@ -9,7 +9,7 @@ func TestIsGenDBCommand(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"CALL gendb.generate_data(table_name => 'users')", true},
+		{"CALL gendb.generate_data(table_pattern => 'users')", true},
 		{"call gendb.return_generated(table_name => 'users')", true},
 		{"  CALL gendb.return_actual(table_name => 'users')", true},
 		{"SELECT * FROM users", false},
@@ -27,15 +27,15 @@ func TestIsGenDBCommand(t *testing.T) {
 }
 
 func TestParseGenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 500)")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users', rows => 500)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "users" {
-		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
 	}
 	if cmd.Args["rows"] != "500" {
 		t.Errorf("got rows %q, want 500", cmd.Args["rows"])
@@ -46,7 +46,7 @@ func TestParseGenerateTable(t *testing.T) {
 }
 
 func TestParseGenerateTableWithSeed(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 500, seed => 42)")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users', rows => 500, seed => 42)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,21 +66,21 @@ func TestParseGenerateAll(t *testing.T) {
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "" {
-		t.Errorf("expected empty table_name for all-tables generate, got %q", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "" {
+		t.Errorf("expected empty table_pattern for all-tables generate, got %q", cmd.Args["table_pattern"])
 	}
 }
 
 func TestParseGenerateDataNoRows(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users')")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "users" {
-		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
 	}
 	if _, ok := cmd.Args["rows"]; ok {
 		t.Errorf("expected no rows arg, got %q", cmd.Args["rows"])
@@ -88,38 +88,38 @@ func TestParseGenerateDataNoRows(t *testing.T) {
 }
 
 func TestParseSemicolon(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users');")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users');")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Name != "generate_data" || cmd.Args["table_name"] != "users" {
+	if cmd.Name != "generate_data" || cmd.Args["table_pattern"] != "users" {
 		t.Error("expected generate_data for users")
 	}
 }
 
 func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
-	cmd, err := Parse(`CALL gendb.generate_data(table_name => "test1")`)
+	cmd, err := Parse(`CALL gendb.generate_data(table_pattern => "test1")`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "test1" {
-		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "test1" {
+		t.Errorf("got table_pattern %q, want test1", cmd.Args["table_pattern"])
 	}
 }
 
 func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
-	cmd, err := Parse(`CALL gendb.generate_data(table_name => "test1", rows => 100)`)
+	cmd, err := Parse(`CALL gendb.generate_data(table_pattern => "test1", rows => 100)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "test1" {
-		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "test1" {
+		t.Errorf("got table_pattern %q, want test1", cmd.Args["table_pattern"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -200,7 +200,7 @@ func TestParseReturnActualCaseInsensitive(t *testing.T) {
 }
 
 func TestParseGenerateDataWithScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 100, scenario => 'edge')")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users', rows => 100, scenario => 'edge')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestParseGenerateDataWithScenario(t *testing.T) {
 }
 
 func TestParseGenerateDataWithoutScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(table_name => 'users', rows => 100)")
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => 'users', rows => 100)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,15 +316,15 @@ func TestParseSyncWithBoth(t *testing.T) {
 }
 
 func TestParseRegenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL gendb.regenerate_data(table_name => 'users', rows => 200)")
+	cmd, err := Parse("CALL gendb.regenerate_data(table_pattern => 'users', rows => 200)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data (resolved alias), got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "users" {
-		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
 	}
 	if cmd.Args["rows"] != "200" {
 		t.Errorf("got rows %q, want 200", cmd.Args["rows"])
@@ -332,7 +332,7 @@ func TestParseRegenerateTable(t *testing.T) {
 }
 
 func TestParseUnknownParameter(t *testing.T) {
-	_, err := Parse("CALL gendb.generate_data(table_name => 'users', bogus => 'value')")
+	_, err := Parse("CALL gendb.generate_data(table_pattern => 'users', bogus => 'value')")
 	if err == nil {
 		t.Error("expected parse error for unknown parameter")
 	}

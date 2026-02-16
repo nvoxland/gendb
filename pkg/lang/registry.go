@@ -5,7 +5,7 @@ var Registry = map[string]*CommandDef{
 	"generate_data": {
 		Name: "generate_data", NeedsConn: true,
 		Params: []ParamDef{
-			{Name: "table_name"}, {Name: "rows"}, {Name: "seed"}, {Name: "scenario"},
+			{Name: "table_pattern"}, {Name: "rows"}, {Name: "seed"}, {Name: "scenario"},
 		},
 	},
 	"return_generated": {

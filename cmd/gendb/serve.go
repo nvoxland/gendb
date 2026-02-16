@@ -136,23 +136,34 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		return nil, fmt.Errorf("no database connection available")
 	}
 
-	table := args["table_name"]
+	pattern := args["table_pattern"]
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
 
-	slog.Info("Handling generate_data", "table", table, "rows", rows, "scenario", scenario)
+	slog.Info("Handling generate_data", "pattern", pattern, "rows", rows, "scenario", scenario)
 
 	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
 
 	var err error
 	var sg *schema.SchemaGraph
-	if table != "" {
-		sg, err = inspector.InspectTable(ctx, table)
+	if pattern != "" && !strings.ContainsAny(pattern, "*?") {
+		// Exact table name — use direct inspection
+		sg, err = inspector.InspectTable(ctx, pattern)
 	} else {
 		sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
 			ExcludeSchemas: []string{shadow.SchemaName},
 		})
+		if err == nil && pattern != "" {
+			// Filter tables to those matching the glob pattern
+			var matched []*schema.Table
+			for _, t := range sg.Tables {
+				if generator.MatchPattern(t.Name, pattern) {
+					matched = append(matched, t)
+				}
+			}
+			sg.SetTables(matched)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("inspecting schema: %w", err)
@@ -189,8 +200,8 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 
 	// 4. Insert status row
 	command := "generate_data"
-	if table != "" {
-		command = fmt.Sprintf("generate_data(%s)", table)
+	if pattern != "" {
+		command = fmt.Sprintf("generate_data(%s)", pattern)
 	}
 
 	var statusID int

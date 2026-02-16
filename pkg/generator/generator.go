@@ -215,7 +215,7 @@ func (g *Generator) skipColumns(table *schema.Table) []string {
 			}
 		}
 		for _, rule := range g.cfg.ColumnRules {
-			if matchPattern(col.Name, rule.Pattern) && rule.Generator == "skip" {
+			if MatchPattern(col.Name, rule.Pattern) && rule.Generator == "skip" {
 				skip = append(skip, col.Name)
 				break
 			}
@@ -239,7 +239,7 @@ func (g *Generator) columnInstructions(table *schema.Table) map[string]string {
 	// Apply column rules
 	for _, rule := range g.cfg.ColumnRules {
 		for _, col := range table.Columns {
-			if matchPattern(col.Name, rule.Pattern) {
+			if MatchPattern(col.Name, rule.Pattern) {
 				if rule.Generator == "skip" {
 					continue
 				}
@@ -496,7 +496,7 @@ func (g *Generator) FillColumn(ctx context.Context, conn *pgx.Conn, qualifiedTab
 	return nil
 }
 
-func matchPattern(name, pattern string) bool {
+func MatchPattern(name, pattern string) bool {
 	// Simple glob matching: only supports * prefix/suffix
 	if pattern == "*" {
 		return true
