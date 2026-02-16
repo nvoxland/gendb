@@ -473,33 +473,70 @@ func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string,
 		schemaContext, count, col.Name, col.DataType, table.Name,
 	)
 
-	resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model: c.model,
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage("You are generating realistic test data for a PostgreSQL database. Return ONLY a JSON array of values."),
-			openai.UserMessage(prompt),
-		},
-	})
-	if err != nil {
-		slog.Error("LLM API call failed for column values", "table", table.Name, "column", col.Name, "error", err)
-		return nil, fmt.Errorf("LLM API call failed: %w", err)
+	messages := []openai.ChatCompletionMessageParamUnion{
+		openai.SystemMessage("You are generating realistic test data for a PostgreSQL database. Return ONLY a JSON array of values."),
+		openai.UserMessage(prompt),
 	}
 
-	if len(resp.Choices) == 0 {
-		slog.Error("LLM returned no choices for column values", "table", table.Name, "column", col.Name)
-		return nil, fmt.Errorf("LLM returned no choices")
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			slog.Warn("Retrying LLM column values request after parse failure", "table", table.Name, "column", col.Name, "attempt", attempt, "error", lastErr)
+			messages = append(messages, openai.UserMessage(
+				fmt.Sprintf("Your previous response was not valid JSON. Error: %s. Please return ONLY a valid JSON array of %d values.", lastErr, count),
+			))
+		}
+
+		resp, err := c.openai.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+			Model:    c.model,
+			Messages: messages,
+		})
+		if err != nil {
+			slog.Error("LLM API call failed for column values", "table", table.Name, "column", col.Name, "error", err)
+			return nil, fmt.Errorf("LLM API call failed: %w", err)
+		}
+
+		if len(resp.Choices) == 0 {
+			slog.Error("LLM returned no choices for column values", "table", table.Name, "column", col.Name)
+			return nil, fmt.Errorf("LLM returned no choices")
+		}
+
+		content := resp.Choices[0].Message.Content
+		cleaned := fixJSON(stripCodeBlock(content))
+
+		values, parseErr := parseColumnValues(cleaned)
+		if parseErr != nil {
+			lastErr = parseErr
+			messages = append(messages, openai.AssistantMessage(content))
+			continue
+		}
+
+		slog.Debug("Generated column values", "table", table.Name, "column", col.Name, "values", len(values))
+		return values, nil
 	}
 
-	content := fixJSON(stripCodeBlock(resp.Choices[0].Message.Content))
+	slog.Error("Failed to parse LLM column values after retries", "table", table.Name, "column", col.Name, "error", lastErr)
+	return nil, fmt.Errorf("parsing LLM column values after %d retries: %w", maxRetries, lastErr)
+}
 
+// parseColumnValues attempts to parse a JSON array of values with fallbacks.
+func parseColumnValues(s string) ([]any, error) {
 	var values []any
-	if err := json.Unmarshal([]byte(content), &values); err != nil {
-		slog.Error("Failed to parse LLM column values response", "table", table.Name, "column", col.Name, "error", err)
-		return nil, fmt.Errorf("parsing LLM response: %w\nContent: %s", err, content)
+	if err := json.Unmarshal([]byte(s), &values); err == nil {
+		return values, nil
 	}
 
-	slog.Debug("Generated column values", "table", table.Name, "column", col.Name, "values", len(values))
-	return values, nil
+	// Fallback: extract JSON objects and convert to []any
+	if objects := extractJSONObjects(s); len(objects) > 0 {
+		slog.Warn("Extracted column values via brace-matching fallback", "extracted", len(objects))
+		result := make([]any, len(objects))
+		for i, obj := range objects {
+			result[i] = obj
+		}
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("parsing column values as JSON array (all fallbacks failed)\nContent: %s", s)
 }
 
 // fixJSON attempts to fix common LLM JSON issues, such as single-quoted strings.

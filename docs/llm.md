@@ -17,7 +17,7 @@ Ollama is the default provider and runs entirely on your machine.
 2. Pull a model:
 
     ```bash
-    ollama pull llama3.2
+    ollama pull qwen2.5:7b
     ```
 
 3. GenDB uses Ollama by default — no configuration changes needed:
@@ -25,9 +25,12 @@ Ollama is the default provider and runs entirely on your machine.
     ```yaml
     llm:
       provider: ollama
-      model: llama3.2
+      model: qwen2.5:7b
       base_url: http://localhost:11434/v1
     ```
+
+!!! tip
+    Qwen 2.5 7B is the recommended default — it produces reliable structured JSON output and runs well on machines with 8GB+ RAM. For constrained hardware (4GB RAM), use `llama3.2` (3B parameters) instead, but expect lower JSON reliability.
 
 ## OpenAI
 

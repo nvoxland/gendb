@@ -73,9 +73,10 @@ func DefaultConfig() *Config {
 	return &Config{
 		LogLevel: "info",
 		LLM: LLMConfig{
-			Provider: "ollama",
-			Model:    "llama3.2",
-			BaseURL:  "http://localhost:11434/v1",
+			Provider:         "ollama",
+			Model:            "qwen2.5:7b",
+			BaseURL:          "http://localhost:11434/v1",
+			StructuredOutput: true,
 		},
 		Generation: GenerationConfig{
 			DefaultRows: 100,

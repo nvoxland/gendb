@@ -14,9 +14,12 @@ Settings are applied in this order (highest priority first):
 ```yaml
 llm:
   provider: ollama        # ollama | openai | custom
-  model: llama3.2         # Model name
+  model: qwen2.5:7b       # Model name
   base_url: http://localhost:11434/v1  # LLM API endpoint
   api_key: ""             # API key (required for openai/custom)
+  structured_output: true # Use JSON Schema to guarantee valid output
+  temperature:            # Sampling temperature (optional, model default)
+  chunk_size: 50          # Rows per LLM request
 
 generation:
   default_rows: 100       # Rows per table unless overridden
@@ -46,11 +49,15 @@ generation:
     - `openai` — OpenAI API
     - `custom` — any OpenAI-compatible endpoint
 
-2. **`generation.default_rows`** — Default number of rows to generate per table. Can be overridden per-table in the `tables` section.
+2. **`llm.structured_output`** — When `true` (the default), GenDB sends a JSON Schema with LLM requests so the model is constrained to produce valid JSON. This dramatically reduces parsing failures, especially with local models. Set to `false` if your model or provider does not support structured output.
 
-3. **`generation.tables`** — Per-table configuration. Each table can specify a custom row count and per-column instructions for the LLM.
+3. **`llm.chunk_size`** — Number of rows generated per LLM call. Larger values mean fewer API calls but longer responses. Default is 50.
 
-4. **`generation.column_rules`** — Pattern-based rules applied across all tables. Patterns use glob syntax (`*` for prefix/suffix matching). Rules are matched against column names.
+4. **`generation.default_rows`** — Default number of rows to generate per table. Can be overridden per-table in the `tables` section.
+
+5. **`generation.tables`** — Per-table configuration. Each table can specify a custom row count and per-column instructions for the LLM.
+
+6. **`generation.column_rules`** — Pattern-based rules applied across all tables. Patterns use glob syntax (`*` for prefix/suffix matching). Rules are matched against column names.
 
 ## Column Configuration
 

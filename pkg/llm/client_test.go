@@ -201,3 +201,43 @@ func TestParseResponse_TotalGarbage(t *testing.T) {
 		t.Fatal("expected error for total garbage input")
 	}
 }
+
+func TestParseColumnValues_Valid(t *testing.T) {
+	input := `[1, 2, 3, "hello", null]`
+	values, err := parseColumnValues(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(values) != 5 {
+		t.Fatalf("expected 5 values, got %d", len(values))
+	}
+}
+
+func TestParseColumnValues_TrailingComma(t *testing.T) {
+	input := fixJSON(`[1, 2, 3,]`)
+	values, err := parseColumnValues(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(values) != 3 {
+		t.Fatalf("expected 3 values, got %d", len(values))
+	}
+}
+
+func TestParseColumnValues_ObjectsFallback(t *testing.T) {
+	input := `garbage {"id":1,"name":"Alice"} more {"id":2,"name":"Bob"}`
+	values, err := parseColumnValues(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(values))
+	}
+}
+
+func TestParseColumnValues_TotalGarbage(t *testing.T) {
+	_, err := parseColumnValues("not json")
+	if err == nil {
+		t.Fatal("expected error for total garbage input")
+	}
+}
