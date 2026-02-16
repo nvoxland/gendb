@@ -42,20 +42,20 @@ func Parse(input string) (*Command, error) {
 	}
 	argsStr := strings.TrimSpace(rest[parenIdx+1 : len(rest)-1])
 
-	args, err := parseCallArgs(argsStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse error: %w", err)
-	}
-
 	// Resolve alias
 	if canonical, ok := Aliases[procName]; ok {
 		procName = canonical
 	}
 
-	// Registry lookup
+	// Registry lookup (needed before parsing args for positional mapping)
 	def, ok := Registry[procName]
 	if !ok {
 		return nil, fmt.Errorf("parse error: unknown procedure %q", procName)
+	}
+
+	args, err := parseCallArgs(argsStr, def.Params)
+	if err != nil {
+		return nil, fmt.Errorf("parse error: %w", err)
 	}
 
 	// Validate args
@@ -91,39 +91,74 @@ func validateArgs(def *CommandDef, args map[string]string) error {
 	return nil
 }
 
-// parseCallArgs parses "key => value, key2 => value2" into a map.
-// Values may be quoted with single quotes. Empty string returns empty map.
-func parseCallArgs(argsStr string) (map[string]string, error) {
+// parseCallArgs parses call arguments supporting positional, named (=> or :=), and mixed notation.
+// Positional args are mapped to params by order. Once a named arg appears, all subsequent must be named.
+// NULL values (case-insensitive) are omitted from the map (treated as unspecified).
+func parseCallArgs(argsStr string, params []ParamDef) (map[string]string, error) {
 	args := make(map[string]string)
 	if argsStr == "" {
 		return args, nil
 	}
 
-	// Split on commas, but respect single-quoted strings
 	parts := splitArgs(argsStr)
+	positionalIdx := 0
+	seenNamed := false
+
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		idx := strings.Index(part, "=>")
-		if idx < 0 {
-			return nil, fmt.Errorf("expected '=>' in argument %q", part)
+
+		// Check for named notation: => or :=
+		key, val, named := parseNamedArg(part)
+
+		if named {
+			seenNamed = true
+			key = strings.ToLower(key)
+			val = unquoteValue(val)
+			if !strings.EqualFold(val, "NULL") {
+				args[key] = val
+			}
+		} else {
+			// Positional arg
+			if seenNamed {
+				return nil, fmt.Errorf("positional argument after named argument is not allowed")
+			}
+			if positionalIdx >= len(params) {
+				return nil, fmt.Errorf("too many positional arguments (expected at most %d)", len(params))
+			}
+			val = unquoteValue(part)
+			if !strings.EqualFold(val, "NULL") {
+				args[params[positionalIdx].Name] = val
+			}
+			positionalIdx++
 		}
-		key := strings.TrimSpace(part[:idx])
-		key = strings.ToLower(key)
-		val := strings.TrimSpace(part[idx+2:])
-		// Unquote single-quoted strings
-		if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
-			val = val[1 : len(val)-1]
-		}
-		// Unquote double-quoted strings
-		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
-			val = val[1 : len(val)-1]
-		}
-		args[key] = val
 	}
 	return args, nil
+}
+
+// parseNamedArg checks if a part contains => or := and splits it into key/value.
+// Returns the key, value, and whether it was a named arg.
+func parseNamedArg(part string) (string, string, bool) {
+	if idx := strings.Index(part, "=>"); idx >= 0 {
+		return strings.TrimSpace(part[:idx]), strings.TrimSpace(part[idx+2:]), true
+	}
+	if idx := strings.Index(part, ":="); idx >= 0 {
+		return strings.TrimSpace(part[:idx]), strings.TrimSpace(part[idx+2:]), true
+	}
+	return "", "", false
+}
+
+// unquoteValue strips surrounding single or double quotes from a value.
+func unquoteValue(val string) string {
+	if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
+		return val[1 : len(val)-1]
+	}
+	if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+		return val[1 : len(val)-1]
+	}
+	return val
 }
 
 // splitArgs splits on commas that are not inside single or double quotes.

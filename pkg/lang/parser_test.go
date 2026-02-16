@@ -337,3 +337,92 @@ func TestParseUnknownParameter(t *testing.T) {
 		t.Error("expected parse error for unknown parameter")
 	}
 }
+
+func TestParsePositionalArgs(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data('users', 100)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
+	}
+	if cmd.Args["rows"] != "100" {
+		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
+	}
+}
+
+func TestParseMixedArgs(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data('users', rows => 100)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
+	}
+	if cmd.Args["rows"] != "100" {
+		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
+	}
+}
+
+func TestParsePositionalWithNull(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data(NULL, 100)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cmd.Args["table_pattern"]; ok {
+		t.Errorf("expected no table_pattern for NULL, got %q", cmd.Args["table_pattern"])
+	}
+	if cmd.Args["rows"] != "100" {
+		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
+	}
+}
+
+func TestParseColonEqualsNotation(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern := 'users')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args["table_pattern"] != "users" {
+		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
+	}
+}
+
+func TestParseNamedThenPositionalError(t *testing.T) {
+	_, err := Parse("CALL gendb.generate_data(table_pattern => 'users', 100)")
+	if err == nil {
+		t.Error("expected error for positional arg after named arg")
+	}
+}
+
+func TestParseTooManyPositionalError(t *testing.T) {
+	_, err := Parse("CALL gendb.generate_data('users', 100, 42, 'default', 'extra')")
+	if err == nil {
+		t.Error("expected error for too many positional args")
+	}
+}
+
+func TestParsePositionalReturnGenerated(t *testing.T) {
+	cmd, err := Parse("CALL gendb.return_generated('users')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "return_generated" {
+		t.Fatalf("expected return_generated, got %q", cmd.Name)
+	}
+	if cmd.Args["table_name"] != "users" {
+		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	}
+}
+
+func TestParseNamedNullOmitted(t *testing.T) {
+	cmd, err := Parse("CALL gendb.generate_data(table_pattern => NULL, rows => 100)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cmd.Args["table_pattern"]; ok {
+		t.Errorf("expected no table_pattern for NULL, got %q", cmd.Args["table_pattern"])
+	}
+	if cmd.Args["rows"] != "100" {
+		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
+	}
+}
