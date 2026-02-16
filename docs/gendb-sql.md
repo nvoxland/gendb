@@ -10,11 +10,11 @@ Commands are case-insensitive. Trailing semicolons are optional.
 
 ### `CALL gendb.generate_data(...)`
 
-Generate synthetic rows for a specific table, or all tables if no arguments are given. Data is inserted into the shadow schema.
+Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the shadow schema. The `table_pattern` argument supports glob-like matching (`*` as wildcard) — for example, `user*` matches `users` and `user_roles`.
 
 ```sql
-CALL gendb.generate_data(table_name => 'users', rows => 500);
-CALL gendb.generate_data(table_name => 'orders', rows => 1000, seed => 42);
+CALL gendb.generate_data(table_pattern => 'users', rows => 500);
+CALL gendb.generate_data(table_pattern => 'order*', rows => 1000, seed => 42);
 
 -- Generate rows for all tables
 CALL gendb.generate_data();
@@ -51,4 +51,39 @@ Restore a table to return real data. Drops the temporary view created by `return
 CALL gendb.return_actual(table_name => 'users');
 
 -- Now: SELECT * FROM users  →  returns real data
+```
+
+---
+
+## Sync
+
+### `CALL gendb.sync(...)`
+
+Re-synchronize shadow tables with the current real schema. For each shadow table, GenDB inspects the real table, drops the old shadow table, and recreates it with the updated DDL. Existing generated data is removed — run `generate_data` again after syncing.
+
+```sql
+-- Sync all shadow tables
+CALL gendb.sync();
+
+-- Sync a specific table
+CALL gendb.sync(table_name => 'users');
+
+-- Sync a specific table in a specific scenario
+CALL gendb.sync(table_name => 'users', scenario => 'edge');
+```
+
+---
+
+## Drop Scenario
+
+### `CALL gendb.drop_scenario(scenario => '...')`
+
+Drop all shadow tables for a given scenario. Optionally filter by source schema.
+
+```sql
+-- Drop all shadow tables for the 'edge' scenario
+CALL gendb.drop_scenario(scenario => 'edge');
+
+-- Drop only shadow tables from 'public' schema for 'edge' scenario
+CALL gendb.drop_scenario(scenario => 'edge', schema => 'public');
 ```

@@ -30,7 +30,7 @@ Once connected through the proxy, use GENDB SQL commands:
 
 ```sql
 -- Generate synthetic data
-CALL gendb.generate_data(table_name => 'users', rows => 500);
+CALL gendb.generate_data(table_pattern => 'users', rows => 500);
 
 -- Route queries for "users" to generated data
 CALL gendb.return_generated(table_name => 'users');

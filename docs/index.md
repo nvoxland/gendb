@@ -21,7 +21,7 @@ gendb serve --db-database mydb --port 5433
 Then connect through the proxy, generate data, and toggle routing per table:
 
 ```sql
-CALL gendb.generate_data(table_name => 'users', rows => 500);
+CALL gendb.generate_data(table_pattern => 'users', rows => 500);
 CALL gendb.return_generated(table_name => 'users');
 -- queries against "users" now return generated data
 

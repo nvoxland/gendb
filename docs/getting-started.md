@@ -45,7 +45,7 @@ From any connection through the proxy, send GENDB SQL commands:
 
 ```sql
 -- Generate synthetic data for a table
-CALL gendb.generate_data(table_name => 'users', rows => 500);
+CALL gendb.generate_data(table_pattern => 'users', rows => 500);
 
 -- Route queries for "users" to the generated data
 CALL gendb.return_generated(table_name => 'users');
