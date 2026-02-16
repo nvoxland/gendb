@@ -84,8 +84,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	lang.RegisterHandler("drop_scenario", handleDropScenario)
 
 	p := proxy.New(proxy.Config{
-		ListenAddr: fmt.Sprintf(":%d", servePort),
-		RealAddr:   realAddr,
+		ListenAddr:       fmt.Sprintf(":%d", servePort),
+		RealAddr:         realAddr,
+		Version:          Version,
+		LLMModel:         cfg.LLM.Model,
+		LLMProvider:      cfg.LLM.Provider,
+		StructuredOutput: cfg.LLM.StructuredOutput,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

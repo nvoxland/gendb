@@ -58,7 +58,35 @@ func BuildSetupSQL() string {
 		}
 	}
 
+	// Permanent view that reads per-session GUC variables set by BuildInfoSQL.
+	b.WriteString("\nCREATE OR REPLACE VIEW gendb.info AS SELECT")
+	b.WriteString(" current_setting('gendb.info.version', true) AS version,")
+	b.WriteString(" current_setting('gendb.info.model', true) AS model,")
+	b.WriteString(" current_setting('gendb.info.provider', true) AS provider,")
+	b.WriteString(" current_setting('gendb.info.structured_output', true)::boolean AS structured_output;\n")
+	b.WriteString("COMMENT ON VIEW gendb.info IS 'GenDB proxy instance information (version, LLM configuration).';\n")
+
 	return b.String()
+}
+
+// BuildInfoSQL returns SQL that sets session-scoped GUC variables with runtime
+// info about this proxy instance. These are read by the gendb.info view via
+// current_setting(). Must run before BuildSetupSQL on each connection.
+func BuildInfoSQL(version, model, provider string, structuredOutput bool) string {
+	escape := func(s string) string {
+		return strings.ReplaceAll(s, "'", "''")
+	}
+	so := "false"
+	if structuredOutput {
+		so = "true"
+	}
+	return fmt.Sprintf(
+		"SET gendb.info.version = '%s';\n"+
+			"SET gendb.info.model = '%s';\n"+
+			"SET gendb.info.provider = '%s';\n"+
+			"SET gendb.info.structured_output = '%s';\n",
+		escape(version), escape(model), escape(provider), so,
+	)
 }
 
 func buildDropProcedure(name string, def *CommandDef) string {

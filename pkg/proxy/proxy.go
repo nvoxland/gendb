@@ -18,6 +18,7 @@ import (
 type Proxy struct {
 	listenAddr string
 	realAddr   string
+	infoSQL    string // per-session temp table SQL for gendb.info
 	listener   net.Listener
 	ready      chan struct{}
 	mu         sync.Mutex
@@ -55,8 +56,12 @@ func (sess *session) setTxStatus(b byte) {
 
 // Config holds proxy configuration.
 type Config struct {
-	ListenAddr string // e.g. ":5433"
-	RealAddr   string // e.g. "localhost:5432"
+	ListenAddr       string // e.g. ":5433"
+	RealAddr         string // e.g. "localhost:5432"
+	Version          string
+	LLMModel         string
+	LLMProvider      string
+	StructuredOutput bool
 }
 
 // New creates a new proxy.
@@ -64,6 +69,7 @@ func New(cfg Config) *Proxy {
 	return &Proxy{
 		listenAddr: cfg.ListenAddr,
 		realAddr:   cfg.RealAddr,
+		infoSQL:    lang.BuildInfoSQL(cfg.Version, cfg.LLMModel, cfg.LLMProvider, cfg.StructuredOutput),
 		ready:      make(chan struct{}),
 		sessions:   make(map[net.Conn]*session),
 	}
@@ -191,7 +197,7 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	slog.Debug("Client authenticated successfully", "user", sess.startupParams["user"])
 
 	// Recreate stub procedures on every connection so signatures stay current
-	if err := ensureGenDBSchema(backendConn); err != nil {
+	if err := ensureGenDBSchema(backendConn, p.infoSQL); err != nil {
 		slog.Warn("Could not create gendb schema stubs", "error", err)
 	} else {
 		slog.Debug("Created gendb schema stubs for intellisense")
