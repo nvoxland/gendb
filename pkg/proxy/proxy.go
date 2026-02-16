@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,7 @@ type Proxy struct {
 
 type session struct {
 	backendConn   net.Conn          // backend connection
+	clientConn    net.Conn          // client connection (for sending NOTICEs)
 	startupParams map[string]string // from StartupMessage.Parameters
 	pgxConn       *pgx.Conn         // reused across generate_data calls
 
@@ -38,6 +40,17 @@ type session struct {
 	relayPaused  bool
 	pauseConfirm chan struct{}
 	resumeCh     chan struct{}
+
+	// Transaction state
+	txStatus atomic.Int32 // 'I' = idle, 'T' = in transaction, 'E' = failed transaction
+}
+
+func (sess *session) getTxStatus() byte {
+	return byte(sess.txStatus.Load())
+}
+
+func (sess *session) setTxStatus(b byte) {
+	sess.txStatus.Store(int32(b))
 }
 
 // Config holds proxy configuration.
@@ -100,7 +113,11 @@ func (p *Proxy) Ready() <-chan struct{} {
 func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	defer clientConn.Close()
 
-	sess := &session{backendParams: make(map[string]string)}
+	sess := &session{
+		backendParams: make(map[string]string),
+		clientConn:    clientConn,
+	}
+	sess.setTxStatus('I')
 	p.mu.Lock()
 	p.sessions[clientConn] = sess
 	p.mu.Unlock()
@@ -209,6 +226,9 @@ func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, 
 			if len(data) > 5 && data[0] == 'P' {
 				query := extractParseQuery(data)
 				if lang.IsGenDBCommand(query) {
+					// Drain remaining extended query protocol messages (Bind, Describe,
+					// Execute, Sync) to prevent them from leaking to the backend.
+					p.drainExtendedQuery(clientConn, data, n)
 					p.handleGenDBCommand(ctx, clientConn, sess, query)
 					continue
 				}
@@ -221,7 +241,7 @@ func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, 
 		}
 	}()
 
-	// Backend -> Client relay (pausable)
+	// Backend -> Client relay (pausable, tracks transaction state)
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := backendConn.Read(buf)
@@ -241,6 +261,23 @@ func (p *Proxy) mainLoop(ctx context.Context, clientConn, backendConn net.Conn, 
 			}
 			return
 		}
+
+		// Scan for ReadyForQuery messages to track transaction state.
+		// ReadyForQuery: 'Z' + int32(5) + byte(txStatus)
+		data := buf[:n]
+		for i := 0; i < len(data); {
+			if data[i] == 'Z' && i+6 <= len(data) {
+				// Verify length field is 4 (int32 big-endian)
+				msgLen := int(data[i+1])<<24 | int(data[i+2])<<16 | int(data[i+3])<<8 | int(data[i+4])
+				if msgLen == 5 {
+					sess.setTxStatus(data[i+5])
+					i += 6
+					continue
+				}
+			}
+			i++
+		}
+
 		if _, err := clientConn.Write(buf[:n]); err != nil {
 			return
 		}
@@ -291,12 +328,8 @@ func (p *Proxy) handleGenDBCommand(ctx context.Context, clientConn net.Conn, ses
 	sess.pauseRelay()
 	defer sess.resumeRelay()
 
-	// Inject real address and connection params into context for background connections.
-	ctx = context.WithValue(ctx, realAddrKey{}, p.realAddr)
-	ctx = context.WithValue(ctx, connParamsKey{}, map[string]string{
-		"user":     sess.startupParams["user"],
-		"database": sess.startupParams["database"],
-	})
+	// Inject client connection into context for NOTICE messages.
+	ctx = context.WithValue(ctx, clientConnKey{}, clientConn)
 
 	// If the command needs a DB connection, lazily create a *pgx.Conn and reuse it.
 	if cmd.NeedsConn() {
@@ -498,8 +531,7 @@ func (p *Proxy) relayClientAuth(clientBackend *pgproto3.Backend, backendConn net
 }
 
 type connKey struct{}
-type realAddrKey struct{}
-type connParamsKey struct{}
+type clientConnKey struct{}
 
 func withConn(ctx context.Context, conn *pgx.Conn) context.Context {
 	return context.WithValue(ctx, connKey{}, conn)
@@ -514,20 +546,29 @@ func ConnFromContext(ctx context.Context) *pgx.Conn {
 	return nil
 }
 
-// RealAddrFromContext returns the real database address from the context.
-func RealAddrFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(realAddrKey{}).(string); ok {
-		return v
-	}
-	return ""
-}
-
-// ConnParamsFromContext returns the connection parameters (user, database) from the context.
-func ConnParamsFromContext(ctx context.Context) map[string]string {
-	if v, ok := ctx.Value(connParamsKey{}).(map[string]string); ok {
+// ClientConnFromContext returns the client net.Conn from the context, for sending NOTICEs.
+func ClientConnFromContext(ctx context.Context) net.Conn {
+	if v, ok := ctx.Value(clientConnKey{}).(net.Conn); ok {
 		return v
 	}
 	return nil
+}
+
+// SendNotice sends a PostgreSQL NOTICE message to the client connection.
+func SendNotice(conn net.Conn, message string) {
+	if conn == nil {
+		return
+	}
+	notice := &pgproto3.NoticeResponse{
+		Severity: "NOTICE",
+		Message:  message,
+	}
+	buf, err := notice.Encode(nil)
+	if err != nil {
+		slog.Debug("Failed to encode NOTICE", "error", err)
+		return
+	}
+	conn.Write(buf)
 }
 
 // extractQuery extracts the query string from a Query message.
@@ -543,6 +584,59 @@ func extractQuery(data []byte) string {
 		query = query[:len(query)-1]
 	}
 	return string(query)
+}
+
+// drainExtendedQuery consumes remaining extended query protocol messages after
+// intercepting a Parse message. This prevents Bind/Describe/Execute/Sync from
+// leaking to the backend when a GENDB command is sent via the extended protocol.
+func (p *Proxy) drainExtendedQuery(clientConn net.Conn, data []byte, n int) {
+	// Check if a Sync ('S') message is already in the current buffer.
+	// Walk through the messages in the buffer by parsing their lengths.
+	pos := 0
+	for pos < n {
+		if pos+5 > n {
+			break
+		}
+		msgType := data[pos]
+		msgLen := int(data[pos+1])<<24 | int(data[pos+2])<<16 | int(data[pos+3])<<8 | int(data[pos+4])
+		totalLen := 1 + msgLen // type byte + length (which includes itself)
+		if msgType == 'S' {
+			// Found Sync in current buffer, nothing more to drain
+			return
+		}
+		if totalLen <= 0 || pos+totalLen > n {
+			break
+		}
+		pos += totalLen
+	}
+
+	// Sync wasn't in the current buffer — read more until we find it.
+	drainBuf := make([]byte, 4096)
+	for {
+		clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		dn, err := clientConn.Read(drainBuf)
+		clientConn.SetReadDeadline(time.Time{})
+		if err != nil {
+			slog.Debug("drainExtendedQuery: read error while draining", "error", err)
+			return
+		}
+		// Scan for Sync message type
+		for i := 0; i < dn; {
+			if i+5 > dn {
+				break
+			}
+			msgType := drainBuf[i]
+			msgLen := int(drainBuf[i+1])<<24 | int(drainBuf[i+2])<<16 | int(drainBuf[i+3])<<8 | int(drainBuf[i+4])
+			totalLen := 1 + msgLen
+			if msgType == 'S' {
+				return
+			}
+			if totalLen <= 0 || i+totalLen > dn {
+				break
+			}
+			i += totalLen
+		}
+	}
 }
 
 // extractParseQuery extracts the query from a Parse message.

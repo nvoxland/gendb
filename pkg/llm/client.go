@@ -219,10 +219,23 @@ func (c *Client) parseResponse(content string, structured bool) ([]map[string]an
 
 	cleaned := fixJSON(stripCodeBlock(content))
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(cleaned), &rows); err != nil {
-		return nil, fmt.Errorf("parsing response as JSON array: %w\nContent: %s", err, cleaned)
+	if err := json.Unmarshal([]byte(cleaned), &rows); err == nil {
+		return rows, nil
 	}
-	return rows, nil
+
+	// Fallback: try parsing as []any and recover stringified objects
+	if recovered := recoverStringifiedObjects(cleaned); len(recovered) > 0 {
+		slog.Warn("Recovered rows from stringified JSON objects", "recovered_rows", len(recovered))
+		return recovered, nil
+	}
+
+	// Last resort: extract individual {...} objects via brace matching
+	if extracted := extractJSONObjects(cleaned); len(extracted) > 0 {
+		slog.Warn("Extracted rows via brace-matching fallback", "extracted_rows", len(extracted))
+		return extracted, nil
+	}
+
+	return nil, fmt.Errorf("parsing response as JSON array (all fallbacks failed)\nContent: %s", cleaned)
 }
 
 // buildResponseFormat constructs a JSON Schema response format for structured outputs.
@@ -528,7 +541,116 @@ func fixJSON(s string) string {
 	result = strings.ReplaceAll(result, ": False", ": false")
 	result = strings.ReplaceAll(result, ": None", ": null")
 
+	// Remove trailing commas before ] or } (outside strings)
+	result = removeTrailingCommas(result)
+
 	return result
+}
+
+// removeTrailingCommas removes trailing/double commas outside of strings.
+func removeTrailingCommas(s string) string {
+	var b strings.Builder
+	inStr := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\\' && inStr && i+1 < len(s) {
+			b.WriteByte(ch)
+			i++
+			b.WriteByte(s[i])
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			b.WriteByte(ch)
+			continue
+		}
+		if inStr {
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == ',' {
+			// Look ahead past whitespace for ] or } or another comma
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				j++
+			}
+			if j < len(s) && (s[j] == ']' || s[j] == '}') {
+				// Trailing comma — skip it
+				continue
+			}
+			if j < len(s) && s[j] == ',' {
+				// Double comma — skip this one
+				continue
+			}
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
+// recoverStringifiedObjects attempts to parse a JSON array where elements
+// may be stringified JSON objects (e.g., ["{\"id\":1}", {"id":2}]).
+func recoverStringifiedObjects(s string) []map[string]any {
+	var elements []any
+	if err := json.Unmarshal([]byte(s), &elements); err != nil {
+		return nil
+	}
+
+	var rows []map[string]any
+	for _, elem := range elements {
+		switch v := elem.(type) {
+		case map[string]any:
+			rows = append(rows, v)
+		case string:
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(v), &obj); err == nil {
+				rows = append(rows, obj)
+			}
+		}
+	}
+	return rows
+}
+
+// extractJSONObjects scans a string for {...} substrings using brace matching
+// and returns any that parse as valid JSON objects.
+func extractJSONObjects(s string) []map[string]any {
+	var results []map[string]any
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		depth := 0
+		inStr := false
+		for j := i; j < len(s); j++ {
+			ch := s[j]
+			if ch == '\\' && inStr {
+				j++ // skip escaped char
+				continue
+			}
+			if ch == '"' {
+				inStr = !inStr
+				continue
+			}
+			if inStr {
+				continue
+			}
+			if ch == '{' {
+				depth++
+			} else if ch == '}' {
+				depth--
+				if depth == 0 {
+					candidate := s[i : j+1]
+					var obj map[string]any
+					if err := json.Unmarshal([]byte(candidate), &obj); err == nil {
+						results = append(results, obj)
+					}
+					i = j // outer loop will i++
+					break
+				}
+			}
+		}
+	}
+	return results
 }
 
 func stripCodeBlock(s string) string {
