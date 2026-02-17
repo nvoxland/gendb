@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"sort"
 
@@ -102,6 +103,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Info("Shutting down proxy...")
 		cancel()
 	}()
+
+	go logTokenUsage(ctx, appLLMClient)
 
 	return p.Start(ctx)
 }
@@ -431,6 +434,22 @@ func handleReturnActual(ctx context.Context, args map[string]string) (*lang.Resu
 		return nil, err
 	}
 	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", table)}, nil
+}
+
+func logTokenUsage(ctx context.Context, client *llm.Client) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prompt, completion, total, requests := client.SnapshotUsage()
+			if requests > 0 {
+				slog.Info("LLM token usage", "prompt_tokens", prompt, "completion_tokens", completion, "total_tokens", total, "requests", requests)
+			}
+		}
+	}
 }
 
 func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Result, error) {

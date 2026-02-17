@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/openai/openai-go"
@@ -15,6 +16,14 @@ import (
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
 )
+
+// TokenUsage tracks accumulated LLM token counts.
+type TokenUsage struct {
+	PromptTokens     atomic.Int64
+	CompletionTokens atomic.Int64
+	TotalTokens      atomic.Int64
+	Requests         atomic.Int64
+}
 
 // Client communicates with an OpenAI-compatible LLM API.
 type Client struct {
@@ -24,6 +33,16 @@ type Client struct {
 	structuredOutput bool
 	provider         string // "ollama" | "openai" | "custom"
 	chunkSize        int
+	usage            TokenUsage
+}
+
+// SnapshotUsage returns accumulated token counts and resets them to zero.
+func (c *Client) SnapshotUsage() (prompt, completion, total, requests int64) {
+	prompt = c.usage.PromptTokens.Swap(0)
+	completion = c.usage.CompletionTokens.Swap(0)
+	total = c.usage.TotalTokens.Swap(0)
+	requests = c.usage.Requests.Swap(0)
+	return
 }
 
 // ClientOption configures a Client.
@@ -179,6 +198,11 @@ func (c *Client) generateChunk(ctx context.Context, req TableDataRequest, count 
 			slog.Error("LLM API call failed", "model", c.model, "table", req.Table.Name, "error", err)
 			return nil, fmt.Errorf("LLM API call failed: %w", err)
 		}
+
+		c.usage.PromptTokens.Add(resp.Usage.PromptTokens)
+		c.usage.CompletionTokens.Add(resp.Usage.CompletionTokens)
+		c.usage.TotalTokens.Add(resp.Usage.TotalTokens)
+		c.usage.Requests.Add(1)
 
 		if len(resp.Choices) == 0 {
 			slog.Error("LLM returned no choices", "model", c.model, "table", req.Table.Name)
@@ -495,6 +519,11 @@ func (c *Client) GenerateColumnValues(ctx context.Context, schemaContext string,
 			slog.Error("LLM API call failed for column values", "table", table.Name, "column", col.Name, "error", err)
 			return nil, fmt.Errorf("LLM API call failed: %w", err)
 		}
+
+		c.usage.PromptTokens.Add(resp.Usage.PromptTokens)
+		c.usage.CompletionTokens.Add(resp.Usage.CompletionTokens)
+		c.usage.TotalTokens.Add(resp.Usage.TotalTokens)
+		c.usage.Requests.Add(1)
 
 		if len(resp.Choices) == 0 {
 			slog.Error("LLM returned no choices for column values", "table", table.Name, "column", col.Name)
