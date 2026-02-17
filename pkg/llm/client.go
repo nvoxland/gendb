@@ -104,6 +104,8 @@ type TableDataRequest struct {
 	SkipColumns        []string          // auto-generated, serial, FK columns
 	UniqueColumns      [][]string        // unique index column groups
 	PreviousRows       []map[string]any  // for multi-chunk consistency
+	Stats              *schema.TableStats
+	SampleRows         []map[string]any
 }
 
 const defaultChunkSize = 50
@@ -447,6 +449,48 @@ func buildPrompt(req TableDataRequest, count int) string {
 			fmt.Fprintf(&b, "- %s: %s\n", col, instr)
 		}
 		b.WriteString("\n")
+	}
+
+	// Real data statistics
+	if req.Stats != nil && len(req.Stats.ColumnStats) > 0 {
+		fmt.Fprintf(&b, "Real data statistics (use as guidance for realistic distributions — approximate, not exact):\n")
+		fmt.Fprintf(&b, "Source table row count: %d\n", req.Stats.RowCount)
+		for _, cs := range req.Stats.ColumnStats {
+			var parts []string
+			parts = append(parts, fmt.Sprintf("%.1f%% null", cs.PercentNull))
+			if cs.PercentZero != nil {
+				parts = append(parts, fmt.Sprintf("%.1f%% zero", *cs.PercentZero))
+			}
+			if cs.PercentEmpty != nil {
+				parts = append(parts, fmt.Sprintf("%.1f%% empty", *cs.PercentEmpty))
+			}
+			desc := strings.Join(parts, ", ")
+
+			if len(cs.LengthBuckets) > 0 {
+				var bucketParts []string
+				for _, b := range cs.LengthBuckets {
+					bucketParts = append(bucketParts, fmt.Sprintf("%s (%.0f%%)", b.Range, b.Percent))
+				}
+				desc += " | lengths: " + strings.Join(bucketParts, ", ")
+			}
+			if len(cs.ValueBuckets) > 0 {
+				var bucketParts []string
+				for _, b := range cs.ValueBuckets {
+					bucketParts = append(bucketParts, fmt.Sprintf("%s (%.0f%%)", b.Range, b.Percent))
+				}
+				desc += " | values: " + strings.Join(bucketParts, ", ")
+			}
+			fmt.Fprintf(&b, "  - %s: %s\n", cs.ColumnName, desc)
+		}
+		b.WriteString("\n")
+	}
+
+	// Sample rows from real data
+	if len(req.SampleRows) > 0 {
+		sampleJSON, err := json.Marshal(req.SampleRows)
+		if err == nil {
+			fmt.Fprintf(&b, "Sample rows from real data (for style/domain inspiration — generate NEW unique rows, do NOT copy these):\n%s\n\n", string(sampleJSON))
+		}
 	}
 
 	// Previous rows for consistency

@@ -379,7 +379,7 @@ func TestParseNamedThenPositionalError(t *testing.T) {
 }
 
 func TestParseTooManyPositionalError(t *testing.T) {
-	_, err := Parse("CALL gendb.generate_data('users', 100, 42, 'default', 'extra')")
+	_, err := Parse("CALL gendb.generate_data('users', 100, 42, 'default', true, 'extra')")
 	if err == nil {
 		t.Error("expected error for too many positional args")
 	}

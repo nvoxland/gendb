@@ -18,11 +18,13 @@ type ProgressFunc func(tableName string, completedTables, totalTables, completed
 
 // Generator produces synthetic data for a schema.
 type Generator struct {
-	llmClient       *llm.Client
-	cfg             config.GenerationConfig
-	targetSchema    string
-	tableNameMapper func(string) string
-	progressFunc    ProgressFunc
+	llmClient         *llm.Client
+	cfg               config.GenerationConfig
+	targetSchema      string
+	tableNameMapper   func(string) string
+	progressFunc      ProgressFunc
+	inspector         *schema.Inspector
+	includeSampleData bool
 }
 
 // Option configures a Generator.
@@ -46,6 +48,20 @@ func WithTableNameMapper(mapper func(string) string) Option {
 func WithProgressFunc(fn ProgressFunc) Option {
 	return func(g *Generator) {
 		g.progressFunc = fn
+	}
+}
+
+// WithInspector sets the schema inspector for gathering table statistics.
+func WithInspector(insp *schema.Inspector) Option {
+	return func(g *Generator) {
+		g.inspector = insp
+	}
+}
+
+// WithSampleData controls whether real sample rows are included in the LLM prompt.
+func WithSampleData(include bool) Option {
+	return func(g *Generator) {
+		g.includeSampleData = include
 	}
 }
 
@@ -108,6 +124,27 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 			}
 		}
 
+		// Gather stats and sample rows if inspector is available
+		var tableStats *schema.TableStats
+		var sampleRows []map[string]any
+		if g.inspector != nil {
+			ts, err := g.inspector.GatherStats(ctx, table)
+			if err != nil {
+				slog.Warn("Failed to gather table stats (continuing without)", "table", table.Name, "error", err)
+			} else {
+				tableStats = ts
+			}
+
+			if g.includeSampleData {
+				sr, err := g.inspector.SampleRows(ctx, table, 15)
+				if err != nil {
+					slog.Warn("Failed to sample rows (continuing without)", "table", table.Name, "error", err)
+				} else {
+					sampleRows = sr
+				}
+			}
+		}
+
 		req := llm.TableDataRequest{
 			SchemaContext:      schemaContext,
 			Table:              table,
@@ -116,6 +153,8 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 			ColumnInstructions: colInstructions,
 			SkipColumns:        skipCols,
 			UniqueColumns:      table.UniqueColumns(),
+			Stats:              tableStats,
+			SampleRows:         sampleRows,
 		}
 
 		generatedRows, err := g.llmClient.GenerateTableData(ctx, req)
@@ -170,6 +209,8 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 						SkipColumns:        skipCols,
 						UniqueColumns:      table.UniqueColumns(),
 						PreviousRows:       uniqueRows,
+						Stats:              tableStats,
+						SampleRows:         sampleRows,
 					}
 					extraRows, err := g.llmClient.GenerateTableData(ctx, retryReq)
 					if err != nil {

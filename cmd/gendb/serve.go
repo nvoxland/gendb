@@ -134,8 +134,12 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 	pattern := args["table_pattern"]
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
+	includeSampleData := true
+	if v, ok := args["include_sample_data"]; ok && (v == "false" || v == "f") {
+		includeSampleData = false
+	}
 
-	slog.Info("Handling generate_data", "pattern", pattern, "rows", rows, "scenario", scenario)
+	slog.Info("Handling generate_data", "pattern", pattern, "rows", rows, "scenario", scenario, "include_sample_data", includeSampleData)
 
 	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
@@ -204,6 +208,8 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		gen, err := generator.New(appLLMClient, genCfg,
 			generator.WithTargetSchema(synthetic.SchemaName),
 			generator.WithTableNameMapper(mapper),
+			generator.WithInspector(inspector),
+			generator.WithSampleData(includeSampleData),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("creating generator: %w", err)

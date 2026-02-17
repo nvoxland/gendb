@@ -3,10 +3,40 @@ package schema
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// Bucket represents a histogram bucket for column statistics.
+type Bucket struct {
+	Range   string // human-readable range label
+	Count   int64
+	Percent float64
+}
+
+// ColumnStats holds distribution statistics for a single column.
+type ColumnStats struct {
+	ColumnName  string
+	DataType    string
+	PercentNull float64
+
+	// String columns — histogram buckets for length
+	LengthBuckets []Bucket
+	PercentEmpty  *float64
+
+	// Numeric columns — histogram buckets for value range
+	ValueBuckets []Bucket
+	PercentZero  *float64
+}
+
+// TableStats holds statistics for a table's data distribution.
+type TableStats struct {
+	TableName   string
+	RowCount    int64
+	ColumnStats []ColumnStats
+}
 
 // Inspector introspects a PostgreSQL database schema.
 type Inspector struct {
@@ -307,6 +337,295 @@ func (i *Inspector) getIndexes(ctx context.Context, t *Table) error {
 	}
 
 	return pkRows.Err()
+}
+
+// GatherStats collects distribution statistics for a table's columns.
+// Returns nil if the table is empty. Errors are non-fatal — callers should
+// log and continue if stats gathering fails.
+func (i *Inspector) GatherStats(ctx context.Context, table *Table) (*TableStats, error) {
+	// Get row count
+	var rowCount int64
+	err := i.conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT COUNT(*) FROM %s", pgx.Identifier{table.Schema, table.Name}.Sanitize()),
+	).Scan(&rowCount)
+	if err != nil {
+		return nil, fmt.Errorf("counting rows in %s: %w", table.Name, err)
+	}
+	if rowCount == 0 {
+		return nil, nil
+	}
+
+	stats := &TableStats{
+		TableName: table.Name,
+		RowCount:  rowCount,
+	}
+
+	for _, col := range table.Columns {
+		if shouldSkipStatsColumn(col) {
+			continue
+		}
+
+		cs, err := i.gatherColumnStats(ctx, table, col, rowCount)
+		if err != nil {
+			// Non-fatal: skip this column
+			continue
+		}
+		stats.ColumnStats = append(stats.ColumnStats, *cs)
+	}
+
+	return stats, nil
+}
+
+// shouldSkipStatsColumn returns true for columns where stats aren't useful.
+func shouldSkipStatsColumn(col *Column) bool {
+	if col.IsGenerated {
+		return true
+	}
+	dt := strings.ToLower(col.DataType)
+	// Skip json/jsonb — not useful for histograms
+	if strings.Contains(dt, "json") {
+		return true
+	}
+	// Skip serial/sequence columns
+	if strings.Contains(dt, "serial") {
+		return true
+	}
+	return false
+}
+
+func (i *Inspector) gatherColumnStats(ctx context.Context, table *Table, col *Column, rowCount int64) (*ColumnStats, error) {
+	quotedCol := pgx.Identifier{col.Name}.Sanitize()
+	quotedTable := pgx.Identifier{table.Schema, table.Name}.Sanitize()
+
+	// Get null count
+	var nullCount int64
+	err := i.conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IS NULL", quotedTable, quotedCol),
+	).Scan(&nullCount)
+	if err != nil {
+		return nil, err
+	}
+
+	cs := &ColumnStats{
+		ColumnName:  col.Name,
+		DataType:    col.DataType,
+		PercentNull: float64(nullCount) / float64(rowCount) * 100,
+	}
+
+	dt := strings.ToLower(col.DataType)
+	switch {
+	case isStringType(dt):
+		i.gatherStringStats(ctx, quotedTable, quotedCol, rowCount, cs)
+	case isNumericType(dt):
+		i.gatherNumericStats(ctx, quotedTable, quotedCol, rowCount, cs)
+	}
+
+	return cs, nil
+}
+
+func isStringType(dt string) bool {
+	return strings.Contains(dt, "char") || strings.Contains(dt, "text") || dt == "name"
+}
+
+func isNumericType(dt string) bool {
+	return strings.Contains(dt, "int") || strings.Contains(dt, "float") ||
+		strings.Contains(dt, "double") || strings.Contains(dt, "real") ||
+		strings.Contains(dt, "numeric") || strings.Contains(dt, "decimal")
+}
+
+func (i *Inspector) gatherStringStats(ctx context.Context, quotedTable, quotedCol string, rowCount int64, cs *ColumnStats) {
+	// Empty count
+	var emptyCount int64
+	err := i.conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IS NOT NULL AND %s = ''", quotedTable, quotedCol, quotedCol),
+	).Scan(&emptyCount)
+	if err == nil {
+		pct := float64(emptyCount) / float64(rowCount) * 100
+		cs.PercentEmpty = &pct
+	}
+
+	// Length histogram using CASE-based bucketing
+	type lenBucket struct {
+		label string
+		min   int
+		max   int // -1 means unbounded
+	}
+	buckets := []lenBucket{
+		{"1-10", 1, 10},
+		{"11-25", 11, 25},
+		{"26-50", 26, 50},
+		{"51-100", 51, 100},
+		{"101+", 101, -1},
+	}
+
+	var parts []string
+	for _, b := range buckets {
+		if b.max == -1 {
+			parts = append(parts, fmt.Sprintf(
+				"COUNT(*) FILTER (WHERE length(%s) >= %d)", quotedCol, b.min))
+		} else {
+			parts = append(parts, fmt.Sprintf(
+				"COUNT(*) FILTER (WHERE length(%s) BETWEEN %d AND %d)", quotedCol, b.min, b.max))
+		}
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IS NOT NULL AND %s != ''",
+		strings.Join(parts, ", "), quotedTable, quotedCol, quotedCol)
+
+	row := i.conn.QueryRow(ctx, query)
+	counts := make([]int64, len(buckets))
+	ptrs := make([]any, len(buckets))
+	for i := range counts {
+		ptrs[i] = &counts[i]
+	}
+	if err := row.Scan(ptrs...); err != nil {
+		return
+	}
+
+	nonNull := rowCount - int64(cs.PercentNull/100*float64(rowCount))
+	if cs.PercentEmpty != nil {
+		nonNull -= int64(*cs.PercentEmpty / 100 * float64(rowCount))
+	}
+	if nonNull <= 0 {
+		nonNull = 1
+	}
+
+	for idx, b := range buckets {
+		if counts[idx] > 0 {
+			cs.LengthBuckets = append(cs.LengthBuckets, Bucket{
+				Range:   b.label,
+				Count:   counts[idx],
+				Percent: math.Round(float64(counts[idx])/float64(nonNull)*1000) / 10,
+			})
+		}
+	}
+}
+
+func (i *Inspector) gatherNumericStats(ctx context.Context, quotedTable, quotedCol string, rowCount int64, cs *ColumnStats) {
+	// Zero count
+	var zeroCount int64
+	err := i.conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = 0", quotedTable, quotedCol),
+	).Scan(&zeroCount)
+	if err == nil {
+		pct := float64(zeroCount) / float64(rowCount) * 100
+		cs.PercentZero = &pct
+	}
+
+	// Get min/max for bucketing
+	var minVal, maxVal float64
+	err = i.conn.QueryRow(ctx,
+		fmt.Sprintf("SELECT COALESCE(MIN(%s)::float8, 0), COALESCE(MAX(%s)::float8, 0) FROM %s WHERE %s IS NOT NULL",
+			quotedCol, quotedCol, quotedTable, quotedCol),
+	).Scan(&minVal, &maxVal)
+	if err != nil || minVal == maxVal {
+		return
+	}
+
+	// Create 5 equal-width buckets
+	numBuckets := 5
+	width := (maxVal - minVal) / float64(numBuckets)
+
+	var parts []string
+	type numBucket struct {
+		label string
+		lo    float64
+		hi    float64
+	}
+	buckets := make([]numBucket, numBuckets)
+
+	for b := 0; b < numBuckets; b++ {
+		lo := minVal + float64(b)*width
+		hi := minVal + float64(b+1)*width
+		if b == numBuckets-1 {
+			hi = maxVal
+		}
+		buckets[b] = numBucket{
+			label: fmt.Sprintf("%s-%s", formatNum(lo), formatNum(hi)),
+			lo:    lo,
+			hi:    hi,
+		}
+		if b == numBuckets-1 {
+			parts = append(parts, fmt.Sprintf(
+				"COUNT(*) FILTER (WHERE %s::float8 >= %f AND %s::float8 <= %f)",
+				quotedCol, lo, quotedCol, hi))
+		} else {
+			parts = append(parts, fmt.Sprintf(
+				"COUNT(*) FILTER (WHERE %s::float8 >= %f AND %s::float8 < %f)",
+				quotedCol, lo, quotedCol, hi))
+		}
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IS NOT NULL",
+		strings.Join(parts, ", "), quotedTable, quotedCol)
+
+	row := i.conn.QueryRow(ctx, query)
+	counts := make([]int64, numBuckets)
+	ptrs := make([]any, numBuckets)
+	for idx := range counts {
+		ptrs[idx] = &counts[idx]
+	}
+	if err := row.Scan(ptrs...); err != nil {
+		return
+	}
+
+	var nonNull int64
+	for _, c := range counts {
+		nonNull += c
+	}
+	if nonNull <= 0 {
+		nonNull = 1
+	}
+
+	for idx, b := range buckets {
+		if counts[idx] > 0 {
+			cs.ValueBuckets = append(cs.ValueBuckets, Bucket{
+				Range:   b.label,
+				Count:   counts[idx],
+				Percent: math.Round(float64(counts[idx])/float64(nonNull)*1000) / 10,
+			})
+		}
+	}
+}
+
+// formatNum formats a float nicely — integer if whole, otherwise 1 decimal.
+func formatNum(f float64) string {
+	if f == math.Trunc(f) {
+		return fmt.Sprintf("%d", int64(f))
+	}
+	return fmt.Sprintf("%.1f", f)
+}
+
+// SampleRows returns a random sample of rows from the table.
+// Returns nil if the table is empty.
+func (i *Inspector) SampleRows(ctx context.Context, table *Table, n int) ([]map[string]any, error) {
+	query := fmt.Sprintf("SELECT * FROM %s ORDER BY random() LIMIT %d",
+		pgx.Identifier{table.Schema, table.Name}.Sanitize(), n)
+
+	rows, err := i.conn.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("sampling rows from %s: %w", table.Name, err)
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	fieldDescs := rows.FieldDescriptions()
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			return nil, fmt.Errorf("reading sample row from %s: %w", table.Name, err)
+		}
+		row := make(map[string]any, len(fieldDescs))
+		for j, fd := range fieldDescs {
+			row[string(fd.Name)] = values[j]
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // FormatTableForLLM returns a schema description limited to the target table
