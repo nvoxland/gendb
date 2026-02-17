@@ -604,7 +604,14 @@ func parseColumnValues(s string) ([]any, error) {
 		slog.Warn("Extracted column values via brace-matching fallback", "extracted", len(objects))
 		result := make([]any, len(objects))
 		for i, obj := range objects {
-			result[i] = obj
+			// Unwrap single-key objects to plain values (LLM wraps like {"age": 25})
+			if len(obj) == 1 {
+				for _, v := range obj {
+					result[i] = v
+				}
+			} else {
+				result[i] = obj
+			}
 		}
 		return result, nil
 	}
