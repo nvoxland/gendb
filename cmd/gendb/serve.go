@@ -19,7 +19,7 @@ import (
 	"github.com/nvoxland/gendb/pkg/llm"
 	"github.com/nvoxland/gendb/pkg/proxy"
 	"github.com/nvoxland/gendb/pkg/schema"
-	"github.com/nvoxland/gendb/pkg/shadow"
+	"github.com/nvoxland/gendb/pkg/synthetic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
@@ -147,7 +147,7 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		sg, err = inspector.InspectTable(ctx, pattern)
 	} else {
 		sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
-			ExcludeSchemas: []string{shadow.SchemaName},
+			ExcludeSchemas: []string{synthetic.SchemaName},
 		})
 		if err == nil && pattern != "" {
 			// Filter tables to those matching the glob pattern
@@ -166,19 +166,19 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 
 	slog.Info("Schema inspected", "tables", len(sg.Tables))
 
-	// 2. Create shadow tables (sync, using session pgxConn)
+	// 2. Create synthetic tables (sync, using session pgxConn)
 	for _, t := range sg.Tables {
 		mapper := func(name string) string {
-			return shadow.ShadowTableName(scenario, t.Schema, name)
+			return synthetic.SyntheticTableName(scenario, t.Schema, name)
 		}
 
 		singleTableGraph := &schema.SchemaGraph{}
 		singleTableGraph.SetTables([]*schema.Table{t})
-		ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
+		ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, synthetic.SchemaName, mapper)
 		if _, err := conn.Exec(ctx, ddl); err != nil {
-			return nil, fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, t.Schema, t.Name), err)
+			return nil, fmt.Errorf("creating synthetic table %s.%s: %w", synthetic.SchemaName, synthetic.SyntheticTableName(scenario, t.Schema, t.Name), err)
 		}
-		slog.Debug("Created shadow table", "shadow_table", shadow.ShadowTableName(scenario, t.Schema, t.Name))
+		slog.Debug("Created synthetic table", "synthetic_table", synthetic.SyntheticTableName(scenario, t.Schema, t.Name))
 	}
 
 	// 3. Generate data synchronously with NOTICE progress
@@ -190,7 +190,7 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		proxy.SendNotice(clientConn, fmt.Sprintf("gendb: generating data for %s (%d/%d)", t.Name, i+1, totalTables))
 
 		mapper := func(name string) string {
-			return shadow.ShadowTableName(scenario, t.Schema, name)
+			return synthetic.SyntheticTableName(scenario, t.Schema, name)
 		}
 
 		singleTableGraph := &schema.SchemaGraph{}
@@ -202,7 +202,7 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		}
 
 		gen, err := generator.New(appLLMClient, genCfg,
-			generator.WithTargetSchema(shadow.SchemaName),
+			generator.WithTargetSchema(synthetic.SchemaName),
 			generator.WithTableNameMapper(mapper),
 		)
 		if err != nil {
@@ -234,27 +234,27 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 	rows, err := conn.Query(ctx, `
 		SELECT table_name FROM information_schema.tables
 		WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-	`, shadow.SchemaName)
+	`, synthetic.SchemaName)
 	if err != nil {
-		return nil, fmt.Errorf("listing shadow tables: %w", err)
+		return nil, fmt.Errorf("listing synthetic tables: %w", err)
 	}
 
-	var shadowNames []string
+	var syntheticNames []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("scanning shadow table name: %w", err)
+			return nil, fmt.Errorf("scanning synthetic table name: %w", err)
 		}
-		shadowNames = append(shadowNames, name)
+		syntheticNames = append(syntheticNames, name)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	for _, shadowName := range shadowNames {
-		sc, sourceSchema, sourceTable, ok := shadow.ParseShadowTableName(shadowName)
+	for _, syntheticName := range syntheticNames {
+		sc, sourceSchema, sourceTable, ok := synthetic.ParseSyntheticTableName(syntheticName)
 		if !ok {
 			continue
 		}
@@ -266,46 +266,46 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 			continue
 		}
 
-		qualifiedShadow := pgx.Identifier{shadow.SchemaName, shadowName}.Sanitize()
+		qualifiedSynthetic := pgx.Identifier{synthetic.SchemaName, syntheticName}.Sanitize()
 
 		origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
 		if origErr != nil {
-			slog.Info("Dropping orphaned shadow table", "shadow_table", shadowName, "original_schema", sourceSchema, "original_table", sourceTable)
-			if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
-				return nil, fmt.Errorf("dropping orphaned shadow table %s: %w", shadowName, err)
+			slog.Info("Dropping orphaned synthetic table", "synthetic_table", syntheticName, "original_schema", sourceSchema, "original_table", sourceTable)
+			if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedSynthetic)); err != nil {
+				return nil, fmt.Errorf("dropping orphaned synthetic table %s: %w", syntheticName, err)
 			}
 			continue
 		}
 
 		origTable := origGraph.Tables[0]
 
-		shadowGraph, err := inspector.InspectTable(ctx, shadowName)
+		syntheticGraph, err := inspector.InspectTable(ctx, syntheticName)
 		if err != nil {
-			return nil, fmt.Errorf("inspecting shadow table %s: %w", shadowName, err)
+			return nil, fmt.Errorf("inspecting synthetic table %s: %w", syntheticName, err)
 		}
-		shadowTable := shadowGraph.Tables[0]
+		syntheticTable := syntheticGraph.Tables[0]
 
 		origCols := make(map[string]*schema.Column)
 		for _, c := range origTable.Columns {
 			origCols[c.Name] = c
 		}
-		shadowCols := make(map[string]bool)
-		for _, c := range shadowTable.Columns {
-			shadowCols[c.Name] = true
+		syntheticCols := make(map[string]bool)
+		for _, c := range syntheticTable.Columns {
+			syntheticCols[c.Name] = true
 		}
 
-		for _, c := range shadowTable.Columns {
+		for _, c := range syntheticTable.Columns {
 			if _, exists := origCols[c.Name]; !exists {
-				slog.Info("Dropping removed column from shadow table", "column", c.Name, "shadow_table", shadowName)
+				slog.Info("Dropping removed column from synthetic table", "column", c.Name, "synthetic_table", syntheticName)
 				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
-					qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
-					return nil, fmt.Errorf("dropping column %s from %s: %w", c.Name, shadowName, err)
+					qualifiedSynthetic, pgx.Identifier{c.Name}.Sanitize())); err != nil {
+					return nil, fmt.Errorf("dropping column %s from %s: %w", c.Name, syntheticName, err)
 				}
 			}
 		}
 
 		for _, origCol := range origTable.Columns {
-			if shadowCols[origCol.Name] {
+			if syntheticCols[origCol.Name] {
 				continue
 			}
 			if origCol.IsGenerated {
@@ -319,25 +319,25 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 				continue
 			}
 
-			slog.Info("Adding new column to shadow table", "column", origCol.Name, "shadow_table", shadowName)
+			slog.Info("Adding new column to synthetic table", "column", origCol.Name, "synthetic_table", syntheticName)
 
 			if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-				qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
-				return nil, fmt.Errorf("adding column %s to %s: %w", origCol.Name, shadowName, err)
+				qualifiedSynthetic, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
+				return nil, fmt.Errorf("adding column %s to %s: %w", origCol.Name, syntheticName, err)
 			}
 
 			gen, err := generator.New(appLLMClient, appConfig.Generation)
 			if err != nil {
 				return nil, fmt.Errorf("creating generator for fill: %w", err)
 			}
-			if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
-				return nil, fmt.Errorf("filling column %s in %s: %w", origCol.Name, shadowName, err)
+			if err := gen.FillColumn(ctx, conn, qualifiedSynthetic, origCol, syntheticTable.PrimaryKey); err != nil {
+				return nil, fmt.Errorf("filling column %s in %s: %w", origCol.Name, syntheticName, err)
 			}
 
 			if !origCol.IsNullable {
 				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL",
-					qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
-					return nil, fmt.Errorf("setting NOT NULL on %s.%s: %w", shadowName, origCol.Name, err)
+					qualifiedSynthetic, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
+					return nil, fmt.Errorf("setting NOT NULL on %s.%s: %w", syntheticName, origCol.Name, err)
 				}
 			}
 		}
@@ -347,26 +347,26 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 		for _, idx := range origTable.Indexes {
 			origIndexes[indexSignature(idx)] = idx
 		}
-		shadowIndexes := make(map[string]*schema.Index)
-		for _, idx := range shadowTable.Indexes {
-			shadowIndexes[indexSignature(idx)] = idx
+		syntheticIndexes := make(map[string]*schema.Index)
+		for _, idx := range syntheticTable.Indexes {
+			syntheticIndexes[indexSignature(idx)] = idx
 		}
 
-		// Drop shadow indexes whose signature no longer exists in the original
-		for sig, idx := range shadowIndexes {
+		// Drop synthetic indexes whose signature no longer exists in the original
+		for sig, idx := range syntheticIndexes {
 			if _, exists := origIndexes[sig]; !exists {
-				slog.Info("Dropping removed index from shadow table", "index", idx.Name, "shadow_table", shadowName)
+				slog.Info("Dropping removed index from synthetic table", "index", idx.Name, "synthetic_table", syntheticName)
 				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP INDEX %s.%s",
-					pgx.Identifier{shadow.SchemaName}.Sanitize(), pgx.Identifier{idx.Name}.Sanitize())); err != nil {
-					return nil, fmt.Errorf("dropping index %s from %s: %w", idx.Name, shadowName, err)
+					pgx.Identifier{synthetic.SchemaName}.Sanitize(), pgx.Identifier{idx.Name}.Sanitize())); err != nil {
+					return nil, fmt.Errorf("dropping index %s from %s: %w", idx.Name, syntheticName, err)
 				}
 			}
 		}
 
-		// Create indexes present on original but missing from shadow
+		// Create indexes present on original but missing from synthetic
 		for _, idx := range origIndexes {
-			if _, exists := shadowIndexes[indexSignature(idx)]; !exists {
-				idxName := shadow.ShadowTableName(sc, sourceSchema, idx.Name)
+			if _, exists := syntheticIndexes[indexSignature(idx)]; !exists {
+				idxName := synthetic.SyntheticTableName(sc, sourceSchema, idx.Name)
 				cols := make([]string, len(idx.Columns))
 				for i, c := range idx.Columns {
 					cols[i] = pgx.Identifier{c}.Sanitize()
@@ -375,10 +375,10 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 				if idx.IsUnique {
 					unique = "UNIQUE "
 				}
-				slog.Info("Creating new index on shadow table", "index", idxName, "shadow_table", shadowName)
+				slog.Info("Creating new index on synthetic table", "index", idxName, "synthetic_table", syntheticName)
 				if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)",
-					unique, pgx.Identifier{idxName}.Sanitize(), qualifiedShadow, strings.Join(cols, ", "))); err != nil {
-					return nil, fmt.Errorf("creating index %s on %s: %w", idxName, shadowName, err)
+					unique, pgx.Identifier{idxName}.Sanitize(), qualifiedSynthetic, strings.Join(cols, ", "))); err != nil {
+					return nil, fmt.Errorf("creating index %s on %s: %w", idxName, syntheticName, err)
 				}
 			}
 		}
@@ -407,11 +407,11 @@ func handleReturnGenerated(ctx context.Context, args map[string]string) (*lang.R
 
 	table := args["table_name"]
 	scenario := args["scenario"]
-	shadowTable := shadow.ShadowTableName(scenario, "public", table)
+	syntheticTable := synthetic.SyntheticTableName(scenario, "public", table)
 	_, err := conn.Exec(ctx, fmt.Sprintf(
 		"CREATE OR REPLACE TEMP VIEW %s AS SELECT * FROM %s",
 		pgx.Identifier{table}.Sanitize(),
-		pgx.Identifier{shadow.SchemaName, shadowTable}.Sanitize(),
+		pgx.Identifier{synthetic.SchemaName, syntheticTable}.Sanitize(),
 	))
 	if err != nil {
 		return nil, err
@@ -467,9 +467,9 @@ func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Resu
 	rows, err := conn.Query(ctx, `
 		SELECT table_name FROM information_schema.tables
 		WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-	`, shadow.SchemaName)
+	`, synthetic.SchemaName)
 	if err != nil {
-		return nil, fmt.Errorf("listing shadow tables: %w", err)
+		return nil, fmt.Errorf("listing synthetic tables: %w", err)
 	}
 
 	var toDrop []string
@@ -477,10 +477,10 @@ func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Resu
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("scanning shadow table name: %w", err)
+			return nil, fmt.Errorf("scanning synthetic table name: %w", err)
 		}
 
-		sc, sourceSchema, _, ok := shadow.ParseShadowTableName(name)
+		sc, sourceSchema, _, ok := synthetic.ParseSyntheticTableName(name)
 		if !ok {
 			continue
 		}
@@ -498,8 +498,8 @@ func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Resu
 	}
 
 	for _, name := range toDrop {
-		qualified := pgx.Identifier{shadow.SchemaName, name}.Sanitize()
-		slog.Info("Dropping shadow table", "table", qualified)
+		qualified := pgx.Identifier{synthetic.SchemaName, name}.Sanitize()
+		slog.Info("Dropping synthetic table", "table", qualified)
 		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualified)); err != nil {
 			return nil, fmt.Errorf("dropping table %s: %w", name, err)
 		}

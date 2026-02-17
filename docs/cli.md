@@ -4,7 +4,7 @@
 
 GenDB — synthetic database for development & testing.
 
-Creates a shadow schema with LLM-analyzed synthetic data inside your real PostgreSQL database. Developers can work against realistic data without production PII.
+Creates a synthetic schema with LLM-analyzed synthetic data inside your real PostgreSQL database. Developers can work against realistic data without production PII.
 
 ---
 
@@ -34,9 +34,9 @@ gendb init --url postgres://user:pass@localhost:5432/mydb
 
 ## `gendb up`
 
-Create shadow schema, apply tables, and generate synthetic data.
+Create synthetic schema, apply tables, and generate synthetic data.
 
-Creates a `gendb_shadow` schema inside your real database, clones the table structure from the `public` schema, and generates synthetic data using the configured LLM.
+Creates a `gendb_synthetic` schema inside your real database, clones the table structure from the `public` schema, and generates synthetic data using the configured LLM.
 
 ```bash
 gendb up [--rows N] [--seed N]
@@ -63,9 +63,9 @@ gendb up --rows 500 --seed 12345
 
 ## `gendb down`
 
-No-op — the shadow schema persists inside your database automatically.
+No-op — the synthetic schema persists inside your database automatically.
 
-The shadow schema lives in the same database as your real data and doesn't need to be "stopped". To remove it, use `gendb destroy`.
+The synthetic schema lives in the same database as your real data and doesn't need to be "stopped". To remove it, use `gendb destroy`.
 
 ```bash
 gendb down
@@ -75,9 +75,9 @@ gendb down
 
 ## `gendb destroy`
 
-Drop the shadow schema and all its data.
+Drop the synthetic schema and all its data.
 
-Drops the `gendb_shadow` schema and all tables within it using `CASCADE`.
+Drops the `gendb_synthetic` schema and all tables within it using `CASCADE`.
 
 ```bash
 gendb destroy
@@ -89,7 +89,7 @@ gendb destroy
 
 Generate synthetic data (without truncating existing data).
 
-Appends new synthetic rows to the shadow schema tables. Requires the shadow schema to exist (`gendb up`).
+Appends new synthetic rows to the synthetic schema tables. Requires the synthetic schema to exist (`gendb up`).
 
 ```bash
 gendb generate [--rows N] [--seed N]
@@ -118,7 +118,7 @@ gendb generate --rows 200
 
 Truncate and regenerate all synthetic data.
 
-Truncates all tables in the shadow schema, then regenerates fresh data. Requires the shadow schema to exist.
+Truncates all tables in the synthetic schema, then regenerates fresh data. Requires the synthetic schema to exist.
 
 ```bash
 gendb reset [--rows N] [--seed N]
@@ -145,9 +145,9 @@ gendb reset --seed 42
 
 ## `gendb sync`
 
-Re-introspect real DB and apply schema changes to shadow.
+Re-introspect real DB and apply schema changes to synthetic.
 
-Drops the shadow schema, re-creates it, fetches the latest schema from the real database, and applies the reconstructed DDL. Data is not regenerated — run `gendb reset` after syncing.
+Drops the synthetic schema, re-creates it, fetches the latest schema from the real database, and applies the reconstructed DDL. Data is not regenerated — run `gendb reset` after syncing.
 
 ```bash
 gendb sync
@@ -157,9 +157,9 @@ gendb sync
 
 ## `gendb status`
 
-Show connection status and shadow schema state.
+Show connection status and synthetic schema state.
 
-Displays the real database URL, shadow schema name, LLM provider/model, and whether the shadow schema exists.
+Displays the real database URL, synthetic schema name, LLM provider/model, and whether the synthetic schema exists.
 
 ```bash
 gendb status
@@ -168,10 +168,10 @@ gendb status
 ### Example output
 
 ```
-Real DB:       postgres://user:pass@localhost:5432/mydb
-Shadow schema: gendb_shadow
-LLM:           ollama/llama3.2
-Shadow DB:     active (schema gendb_shadow exists)
+Real DB:          postgres://user:pass@localhost:5432/mydb
+Synthetic schema: gendb_synthetic
+LLM:              ollama/llama3.2
+Synthetic DB:     active (schema gendb_synthetic exists)
 ```
 
 ---

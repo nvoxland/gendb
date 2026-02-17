@@ -4,7 +4,7 @@ package lang
 var Registry = map[string]*CommandDef{
 	"generate_data": {
 		Name: "generate_data", NeedsConn: true,
-		Comment: "Generate synthetic data into the shadow schema.",
+		Comment: "Generate synthetic data into the synthetic schema.",
 		Params: []ParamDef{
 			{Name: "table_pattern", SQLType: "text", Default: "NULL"},
 			{Name: "rows", SQLType: "integer", Default: "100"},
@@ -14,7 +14,7 @@ var Registry = map[string]*CommandDef{
 	},
 	"return_generated": {
 		Name: "return_generated", NeedsConn: true,
-		Comment: "Route queries for a table to generated (shadow) data.",
+		Comment: "Route queries for a table to generated (synthetic) data.",
 		Params: []ParamDef{
 			{Name: "table_name", Required: true, SQLType: "text"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
@@ -30,7 +30,7 @@ var Registry = map[string]*CommandDef{
 	},
 	"sync": {
 		Name: "sync", NeedsConn: true,
-		Comment: "Sync shadow table schemas with their original tables.",
+		Comment: "Sync synthetic table schemas with their original tables.",
 		Params: []ParamDef{
 			{Name: "table_name", SQLType: "text", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "NULL"},

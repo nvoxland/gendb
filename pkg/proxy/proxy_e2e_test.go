@@ -18,7 +18,7 @@ import (
 	"github.com/nvoxland/gendb/pkg/lang"
 	"github.com/nvoxland/gendb/pkg/llm"
 	"github.com/nvoxland/gendb/pkg/schema"
-	"github.com/nvoxland/gendb/pkg/shadow"
+	"github.com/nvoxland/gendb/pkg/synthetic"
 )
 
 func TestConnFromContext(t *testing.T) {
@@ -367,7 +367,7 @@ func registerGenerateHandler(t *testing.T) {
 			sg, err = inspector.InspectTable(ctx, table)
 		} else {
 			sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
-				ExcludeSchemas: []string{shadow.SchemaName},
+				ExcludeSchemas: []string{synthetic.SchemaName},
 			})
 		}
 		if err != nil {
@@ -376,14 +376,14 @@ func registerGenerateHandler(t *testing.T) {
 
 		for _, tbl := range sg.Tables {
 			mapper := func(name string) string {
-				return shadow.ShadowTableName(scenario, tbl.Schema, name)
+				return synthetic.SyntheticTableName(scenario, tbl.Schema, name)
 			}
 
 			singleTableGraph := &schema.SchemaGraph{}
 			singleTableGraph.SetTables([]*schema.Table{tbl})
-			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, shadow.SchemaName, mapper)
+			ddl := schema.ReconstructDDLForSchemaWithMapping(singleTableGraph, synthetic.SchemaName, mapper)
 			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return nil, fmt.Errorf("creating shadow table %s.%s: %w", shadow.SchemaName, shadow.ShadowTableName(scenario, tbl.Schema, tbl.Name), err)
+				return nil, fmt.Errorf("creating synthetic table %s.%s: %w", synthetic.SchemaName, synthetic.SyntheticTableName(scenario, tbl.Schema, tbl.Name), err)
 			}
 
 			genCfg := config.GenerationConfig{
@@ -396,7 +396,7 @@ func registerGenerateHandler(t *testing.T) {
 			// Create a test LLM client pointing to a local Ollama instance
 			testLLMClient := llm.NewClient("http://localhost:11434/v1", "llama3.2", "")
 			gen, err := generator.New(testLLMClient, genCfg,
-				generator.WithTargetSchema(shadow.SchemaName),
+				generator.WithTargetSchema(synthetic.SchemaName),
 				generator.WithTableNameMapper(mapper),
 			)
 			if err != nil {
@@ -468,23 +468,23 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 		t.Fatalf("generate_data: %v", err)
 	}
 
-	// Verify rows were inserted in the shadow table with the new naming convention.
-	shadowTable := shadow.ShadowTableName("", "public", "test1")
+	// Verify rows were inserted in the synthetic table with the new naming convention.
+	syntheticTable := synthetic.SyntheticTableName("", "public", "test1")
 	var count int
 	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s",
-		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&count)
+		synthetic.SchemaName, pgx.Identifier{syntheticTable}.Sanitize())).Scan(&count)
 	if err != nil {
-		t.Fatalf("counting rows in shadow table: %v", err)
+		t.Fatalf("counting rows in synthetic table: %v", err)
 	}
 	if count == 0 {
-		t.Fatalf("expected rows in shadow table, got 0")
+		t.Fatalf("expected rows in synthetic table, got 0")
 	}
 
 	// Verify all values respect varchar constraints.
 	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT name, address, city, state, zip FROM %s.%s",
-		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize()))
+		synthetic.SchemaName, pgx.Identifier{syntheticTable}.Sanitize()))
 	if err != nil {
-		t.Fatalf("querying shadow table: %v", err)
+		t.Fatalf("querying synthetic table: %v", err)
 	}
 	defer rows.Close()
 
@@ -535,27 +535,27 @@ func TestSyncE2E(t *testing.T) {
 		rows, err := conn.Query(ctx, `
 			SELECT table_name FROM information_schema.tables
 			WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-		`, shadow.SchemaName)
+		`, synthetic.SchemaName)
 		if err != nil {
-			return nil, fmt.Errorf("listing shadow tables: %w", err)
+			return nil, fmt.Errorf("listing synthetic tables: %w", err)
 		}
 
-		var shadowNames []string
+		var syntheticNames []string
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			shadowNames = append(shadowNames, name)
+			syntheticNames = append(syntheticNames, name)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
 
-		for _, shadowName := range shadowNames {
-			sc, _, sourceTable, ok := shadow.ParseShadowTableName(shadowName)
+		for _, syntheticName := range syntheticNames {
+			sc, _, sourceTable, ok := synthetic.ParseSyntheticTableName(syntheticName)
 			if !ok {
 				continue
 			}
@@ -566,12 +566,12 @@ func TestSyncE2E(t *testing.T) {
 				continue
 			}
 
-			qualifiedShadow := fmt.Sprintf("%s.%s",
-				shadow.SchemaName, pgx.Identifier{shadowName}.Sanitize())
+			qualifiedSynthetic := fmt.Sprintf("%s.%s",
+				synthetic.SchemaName, pgx.Identifier{syntheticName}.Sanitize())
 
 			origGraph, origErr := inspector.InspectTable(ctx, sourceTable)
 			if origErr != nil {
-				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedShadow)); err != nil {
+				if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualifiedSynthetic)); err != nil {
 					return nil, err
 				}
 				continue
@@ -579,32 +579,32 @@ func TestSyncE2E(t *testing.T) {
 
 			origTable := origGraph.Tables[0]
 
-			shadowGraph, err := inspector.InspectTable(ctx, shadowName)
+			syntheticGraph, err := inspector.InspectTable(ctx, syntheticName)
 			if err != nil {
 				return nil, err
 			}
-			shadowTable := shadowGraph.Tables[0]
+			syntheticTable := syntheticGraph.Tables[0]
 
 			origCols := make(map[string]*schema.Column)
 			for _, c := range origTable.Columns {
 				origCols[c.Name] = c
 			}
-			shadowCols := make(map[string]bool)
-			for _, c := range shadowTable.Columns {
-				shadowCols[c.Name] = true
+			syntheticCols := make(map[string]bool)
+			for _, c := range syntheticTable.Columns {
+				syntheticCols[c.Name] = true
 			}
 
-			for _, c := range shadowTable.Columns {
+			for _, c := range syntheticTable.Columns {
 				if _, exists := origCols[c.Name]; !exists {
 					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
-						qualifiedShadow, pgx.Identifier{c.Name}.Sanitize())); err != nil {
+						qualifiedSynthetic, pgx.Identifier{c.Name}.Sanitize())); err != nil {
 						return nil, err
 					}
 				}
 			}
 
 			for _, origCol := range origTable.Columns {
-				if shadowCols[origCol.Name] {
+				if syntheticCols[origCol.Name] {
 					continue
 				}
 				if origCol.IsGenerated {
@@ -619,7 +619,7 @@ func TestSyncE2E(t *testing.T) {
 				}
 
 				if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-					qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
+					qualifiedSynthetic, pgx.Identifier{origCol.Name}.Sanitize(), origCol.DataType)); err != nil {
 					return nil, err
 				}
 
@@ -629,13 +629,13 @@ func TestSyncE2E(t *testing.T) {
 				if err != nil {
 					return nil, fmt.Errorf("creating generator: %w", err)
 				}
-				if err := gen.FillColumn(ctx, conn, qualifiedShadow, origCol, shadowTable.PrimaryKey); err != nil {
+				if err := gen.FillColumn(ctx, conn, qualifiedSynthetic, origCol, syntheticTable.PrimaryKey); err != nil {
 					return nil, err
 				}
 
 				if !origCol.IsNullable {
 					if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL",
-						qualifiedShadow, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
+						qualifiedSynthetic, pgx.Identifier{origCol.Name}.Sanitize())); err != nil {
 						return nil, err
 					}
 				}
@@ -693,17 +693,17 @@ func TestSyncE2E(t *testing.T) {
 		t.Fatalf("generate_data: %v", err)
 	}
 
-	shadowTable := shadow.ShadowTableName("", "public", "test1")
+	syntheticTable := synthetic.SyntheticTableName("", "public", "test1")
 
-	// Verify initial shadow table
+	// Verify initial synthetic table
 	var count int
 	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s",
-		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&count)
+		synthetic.SchemaName, pgx.Identifier{syntheticTable}.Sanitize())).Scan(&count)
 	if err != nil {
 		t.Fatalf("counting initial rows: %v", err)
 	}
 	if count == 0 {
-		t.Fatalf("expected rows in shadow table, got 0")
+		t.Fatalf("expected rows in synthetic table, got 0")
 	}
 
 	// Alter original: add column, drop column
@@ -722,14 +722,14 @@ func TestSyncE2E(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 
-	// Verify shadow table has 'age' column and no 'email' column
+	// Verify synthetic table has 'age' column and no 'email' column
 	var hasAge, hasEmail bool
 	colRows, err := conn.Query(ctx, `
 		SELECT column_name FROM information_schema.columns
 		WHERE table_schema = $1 AND table_name = $2
-	`, shadow.SchemaName, shadowTable)
+	`, synthetic.SchemaName, syntheticTable)
 	if err != nil {
-		t.Fatalf("querying shadow columns: %v", err)
+		t.Fatalf("querying synthetic columns: %v", err)
 	}
 	for colRows.Next() {
 		var colName string
@@ -746,16 +746,16 @@ func TestSyncE2E(t *testing.T) {
 	colRows.Close()
 
 	if !hasAge {
-		t.Error("expected shadow table to have 'age' column after sync")
+		t.Error("expected synthetic table to have 'age' column after sync")
 	}
 	if hasEmail {
-		t.Error("expected shadow table NOT to have 'email' column after sync")
+		t.Error("expected synthetic table NOT to have 'email' column after sync")
 	}
 
 	// Verify age column has data (not all nulls)
 	var nullCount int
 	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE age IS NULL",
-		shadow.SchemaName, pgx.Identifier{shadowTable}.Sanitize())).Scan(&nullCount)
+		synthetic.SchemaName, pgx.Identifier{syntheticTable}.Sanitize())).Scan(&nullCount)
 	if err != nil {
 		t.Fatalf("counting nulls: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestSyncE2E(t *testing.T) {
 		t.Error("expected age column to have generated data, but all values are NULL")
 	}
 
-	// Drop original table and sync to clean up orphaned shadow table
+	// Drop original table and sync to clean up orphaned synthetic table
 	_, err = conn.Exec(ctx, "DROP TABLE test1 CASCADE")
 	if err != nil {
 		t.Fatalf("DROP TABLE: %v", err)
@@ -774,18 +774,18 @@ func TestSyncE2E(t *testing.T) {
 		t.Fatalf("sync after drop: %v", err)
 	}
 
-	// Verify shadow table no longer exists
+	// Verify synthetic table no longer exists
 	var tableExists bool
 	err = conn.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
 			WHERE table_schema = $1 AND table_name = $2
 		)
-	`, shadow.SchemaName, shadowTable).Scan(&tableExists)
+	`, synthetic.SchemaName, syntheticTable).Scan(&tableExists)
 	if err != nil {
-		t.Fatalf("checking shadow table existence: %v", err)
+		t.Fatalf("checking synthetic table existence: %v", err)
 	}
 	if tableExists {
-		t.Error("expected shadow table to be dropped after original was dropped and sync was run")
+		t.Error("expected synthetic table to be dropped after original was dropped and sync was run")
 	}
 }

@@ -10,7 +10,7 @@ Commands are case-insensitive. Trailing semicolons are optional.
 
 ### `CALL gendb.generate_data(...)`
 
-Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the shadow schema. The `table_pattern` argument supports glob-like matching (`*` as wildcard) — for example, `user*` matches `users` and `user_roles`.
+Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the synthetic schema. The `table_pattern` argument supports glob-like matching (`*` as wildcard) — for example, `user*` matches `users` and `user_roles`.
 
 ```sql
 CALL gendb.generate_data(table_pattern => 'users', rows => 500);
@@ -26,7 +26,7 @@ CALL gendb.generate_data();
 
 ### `CALL gendb.return_generated(table_name => '...')`
 
-Route queries for a table to the generated (shadow) data. Creates a temporary view that shadows the real table, so subsequent queries against that table name return generated data.
+Route queries for a table to the generated (synthetic) data. Creates a temporary view that overlays the real table, so subsequent queries against that table name return generated data.
 
 ```sql
 CALL gendb.return_generated(table_name => 'users');
@@ -56,10 +56,10 @@ CALL gendb.return_actual(table_name => 'users');
 
 ### `CALL gendb.sync(...)`
 
-Re-synchronize shadow tables with the current real schema. For each shadow table, GenDB inspects the real table, drops the old shadow table, and recreates it with the updated DDL. Existing generated data is removed — run `generate_data` again after syncing.
+Re-synchronize synthetic tables with the current real schema. For each synthetic table, GenDB inspects the real table, drops the old synthetic table, and recreates it with the updated DDL. Existing generated data is removed — run `generate_data` again after syncing.
 
 ```sql
--- Sync all shadow tables
+-- Sync all synthetic tables
 CALL gendb.sync();
 
 -- Sync a specific table
@@ -75,12 +75,12 @@ CALL gendb.sync(table_name => 'users', scenario => 'edge');
 
 ### `CALL gendb.drop_scenario(scenario => '...')`
 
-Drop all shadow tables for a given scenario. Optionally filter by source schema.
+Drop all synthetic tables for a given scenario. Optionally filter by source schema.
 
 ```sql
--- Drop all shadow tables for the 'edge' scenario
+-- Drop all synthetic tables for the 'edge' scenario
 CALL gendb.drop_scenario(scenario => 'edge');
 
--- Drop only shadow tables from 'public' schema for 'edge' scenario
+-- Drop only synthetic tables from 'public' schema for 'edge' scenario
 CALL gendb.drop_scenario(scenario => 'edge', schema => 'public');
 ```

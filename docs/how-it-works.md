@@ -17,19 +17,19 @@ This page describes GenDB's architecture and internal mechanics.
                      └──────────────────────────┘
 ```
 
-## Schema-Based Shadow
+## Schema-Based Synthetic Database
 
-The shadow database is a PostgreSQL schema (`public_gendb` by default) created inside your real database:
+The synthetic database is a PostgreSQL schema (`public_gendb` by default) created inside your real database:
 
 - **No external dependencies** — no Docker, no separate database instance
-- **Same database** — the shadow schema coexists with your real `public` schema
+- **Same database** — the synthetic schema coexists with your real `public` schema
 - **Schema cloning** — your real table structure is reconstructed as `public_gendb.<table>` with synthetic data
 
 ### How Routing Works
 
 GenDB uses temporary views to route queries per table:
 
-- **`return_generated`** creates a temporary view with the same name as the real table, pointing at the shadow schema table. Since temporary views take priority over base tables in PostgreSQL's resolution, subsequent queries against that table name return generated data.
+- **`return_generated`** creates a temporary view with the same name as the real table, pointing at the synthetic schema table. Since temporary views take priority over base tables in PostgreSQL's resolution, subsequent queries against that table name return generated data.
 - **`return_actual`** drops the temporary view, restoring normal resolution to the real table.
 
 This approach provides per-table routing with no impact on other sessions or tables.
@@ -40,9 +40,9 @@ GenDB introspects your real database to understand its structure:
 
 1. **`information_schema` + `pg_catalog`** — Queries `information_schema.tables`, `information_schema.columns`, and `pg_catalog` views to discover tables, columns, data types, primary keys, foreign keys, and unique constraints.
 
-2. **DDL reconstruction** — GenDB reconstructs schema-qualified `CREATE TABLE` statements from the introspected metadata, targeting the shadow schema.
+2. **DDL reconstruction** — GenDB reconstructs schema-qualified `CREATE TABLE` statements from the introspected metadata, targeting the synthetic schema.
 
-3. **Schema exclusion** — During introspection, the shadow schema is excluded so shadow tables don't appear as "real" tables.
+3. **Schema exclusion** — During introspection, the synthetic schema is excluded so synthetic tables don't appear as "real" tables.
 
 ## LLM-Based Data Generation
 

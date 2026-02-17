@@ -1,8 +1,8 @@
 connection:
   real:
     url: postgres://user:pass@localhost:5432/mydb
-  shadow:
-    key: gendb              # shadow schema naming key: {source_schema}_{key}
+  synthetic:
+    key: gendb              # synthetic schema naming key: {source_schema}_{key}
 
 llm:
   provider: ollama        # ollama | openai | custom

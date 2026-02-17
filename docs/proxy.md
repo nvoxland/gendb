@@ -6,7 +6,7 @@ The GenDB proxy is a PostgreSQL wire protocol relay that sits between your appli
 
 - **Byte-level relay** — Standard SQL queries are forwarded as raw bytes with no parsing or modification
 - **GENDB command interception** — Queries starting with `CALL gendb.` are intercepted, parsed, and executed locally by the proxy
-- **Per-table routing via temp views** — `return_generated` creates a temporary view that shadows the real table; `return_actual` drops it to restore real data access
+- **Per-table routing via temp views** — `return_generated` creates a temporary view that overlays the real table; `return_actual` drops it to restore real data access
 
 ## Starting the Proxy
 
@@ -43,7 +43,7 @@ CALL gendb.return_actual(table_name => 'users');
 
 The proxy uses PostgreSQL temporary views for per-table routing:
 
-- **`return_generated`** creates a `CREATE OR REPLACE TEMP VIEW <table> AS SELECT * FROM <shadow_schema>.<table>`. Because temporary views take priority over base tables in PostgreSQL's name resolution, queries against that table name return generated data.
+- **`return_generated`** creates a `CREATE OR REPLACE TEMP VIEW <table> AS SELECT * FROM <synthetic_schema>.<table>`. Because temporary views take priority over base tables in PostgreSQL's name resolution, queries against that table name return generated data.
 - **`return_actual`** drops the temporary view with `DROP VIEW IF EXISTS pg_temp.<table>`, restoring normal resolution to the real table.
 
 This approach means:
