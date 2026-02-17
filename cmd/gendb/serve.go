@@ -131,7 +131,8 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		return nil, fmt.Errorf("no database connection available")
 	}
 
-	pattern := args["table_pattern"]
+	include := args["include_tables"]
+	exclude := args["exclude_tables"]
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
 	includeSampleData := true
@@ -139,27 +140,40 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 		includeSampleData = false
 	}
 
-	slog.Info("Handling generate_data", "pattern", pattern, "rows", rows, "scenario", scenario, "include_sample_data", includeSampleData)
+	slog.Info("Handling generate_data", "include_tables", include, "exclude_tables", exclude, "rows", rows, "scenario", scenario, "include_sample_data", includeSampleData)
 
 	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
 
 	var err error
 	var sg *schema.SchemaGraph
-	if pattern != "" && !strings.ContainsAny(pattern, "*?") {
+	if include != "" && !strings.ContainsAny(include, "*?") {
 		// Exact table name — use direct inspection
-		sg, err = inspector.InspectTable(ctx, pattern)
+		sg, err = inspector.InspectTable(ctx, include)
+		if err == nil && exclude != "" {
+			// Apply exclude filter even for exact include
+			var matched []*schema.Table
+			for _, t := range sg.Tables {
+				if !generator.MatchPattern(t.Name, exclude) {
+					matched = append(matched, t)
+				}
+			}
+			sg.SetTables(matched)
+		}
 	} else {
 		sg, err = inspector.InspectWithOptions(ctx, schema.InspectOptions{
 			ExcludeSchemas: []string{synthetic.SchemaName},
 		})
-		if err == nil && pattern != "" {
-			// Filter tables to those matching the glob pattern
+		if err == nil {
 			var matched []*schema.Table
 			for _, t := range sg.Tables {
-				if generator.MatchPattern(t.Name, pattern) {
-					matched = append(matched, t)
+				if include != "" && !generator.MatchPattern(t.Name, include) {
+					continue
 				}
+				if exclude != "" && generator.MatchPattern(t.Name, exclude) {
+					continue
+				}
+				matched = append(matched, t)
 			}
 			sg.SetTables(matched)
 		}

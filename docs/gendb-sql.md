@@ -10,11 +10,19 @@ Commands are case-insensitive. Trailing semicolons are optional.
 
 ### `CALL gendb.generate_data(...)`
 
-Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the synthetic schema. The `table_pattern` argument supports glob-like matching (`*` as wildcard) — for example, `user*` matches `users` and `user_roles`.
+Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the synthetic schema.
+
+Use `include_tables` to limit generation to matching tables and `exclude_tables` to skip matching tables. Both support glob-like matching (`*` and `?` as wildcards) — for example, `user*` matches `users` and `user_roles`. Either, both, or neither can be specified.
 
 ```sql
-CALL gendb.generate_data(table_pattern => 'users', rows => 500);
-CALL gendb.generate_data(table_pattern => 'order*', rows => 1000, seed => 42);
+CALL gendb.generate_data(include_tables => 'users', rows => 500);
+CALL gendb.generate_data(include_tables => 'order*', rows => 1000, seed => 42);
+
+-- Generate for all tables except audit logs
+CALL gendb.generate_data(exclude_tables => '*_log');
+
+-- Combine: include user tables, but exclude user_logs
+CALL gendb.generate_data(include_tables => 'user*', exclude_tables => 'user_logs');
 
 -- Generate rows for all tables
 CALL gendb.generate_data();

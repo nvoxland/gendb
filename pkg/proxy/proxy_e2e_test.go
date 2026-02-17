@@ -363,7 +363,7 @@ func registerGenerateHandler(t *testing.T) {
 			return nil, fmt.Errorf("no database connection available")
 		}
 
-		table := args["table_pattern"]
+		table := args["include_tables"]
 		rows, _ := strconv.Atoi(args["rows"])
 		scenario := args["scenario"]
 
@@ -471,7 +471,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	}
 
 	// Generate data via the proxy's CALL interception.
-	_, err = conn.Exec(ctx, "CALL gendb.generate_data(table_pattern => 'test1', rows => '10')")
+	_, err = conn.Exec(ctx, "CALL gendb.generate_data(include_tables => 'test1', rows => '10')")
 	if err != nil {
 		t.Fatalf("generate_data: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestSyncE2E(t *testing.T) {
 	}
 
 	// Generate data
-	_, err = conn.Exec(ctx, "CALL gendb.generate_data(table_pattern => 'test1', rows => '5')")
+	_, err = conn.Exec(ctx, "CALL gendb.generate_data(include_tables => 'test1', rows => '5')")
 	if err != nil {
 		t.Fatalf("generate_data: %v", err)
 	}

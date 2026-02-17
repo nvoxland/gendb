@@ -6,7 +6,8 @@ var Registry = map[string]*CommandDef{
 		Name: "generate_data", NeedsConn: true,
 		Comment: "Generate synthetic data into the synthetic schema.",
 		Params: []ParamDef{
-			{Name: "table_pattern", SQLType: "text", Default: "NULL"},
+			{Name: "include_tables", SQLType: "text", Default: "NULL"},
+			{Name: "exclude_tables", SQLType: "text", Default: "NULL"},
 			{Name: "rows", SQLType: "integer", Default: "100"},
 			{Name: "seed", SQLType: "bigint", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
