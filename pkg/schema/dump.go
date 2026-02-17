@@ -133,11 +133,11 @@ func quoteIdent(s string) string {
 func needsQuoting(s string) bool {
 	for i, c := range s {
 		if i == 0 {
-			if !((c >= 'a' && c <= 'z') || c == '_') {
+			if (c < 'a' || c > 'z') && c != '_' {
 				return true
 			}
 		} else {
-			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 				return true
 			}
 		}

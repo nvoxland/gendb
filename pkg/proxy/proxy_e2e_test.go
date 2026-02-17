@@ -115,17 +115,17 @@ func TestVirtualHandshakeConn(t *testing.T) {
 	}
 
 	// Verify the server did NOT receive the discarded write.
-	server.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	_ = server.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	buf := make([]byte, 100)
 	_, err = server.Read(buf)
 	if err == nil {
 		t.Error("server received data that should have been discarded")
 	}
-	server.SetReadDeadline(time.Time{})
+	_ = server.SetReadDeadline(time.Time{})
 
 	// Second write should pass through to the real conn.
 	payload := []byte("real query")
-	vConn.Write(payload)
+	_, _ = vConn.Write(payload)
 
 	n, err = server.Read(buf)
 	if err != nil {
@@ -151,10 +151,10 @@ func TestVirtualHandshakeConn(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 	// Real conn should still be usable after vConn.Close().
-	server.Write([]byte("after close"))
+	_, _ = server.Write([]byte("after close"))
 	// Drain remaining handshake data, then read the real data.
 	drainBuf := make([]byte, len(handshakeData)+100)
-	client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	total := 0
 	for {
 		n, err := client.Read(drainBuf[total:])
@@ -166,7 +166,7 @@ func TestVirtualHandshakeConn(t *testing.T) {
 			break
 		}
 	}
-	client.SetReadDeadline(time.Time{})
+	_ = client.SetReadDeadline(time.Time{})
 	if !bytes.Contains(drainBuf[:total], []byte("after close")) {
 		t.Error("real conn not usable after vConn.Close()")
 	}
@@ -191,15 +191,15 @@ func newTCPPair(t *testing.T) (net.Conn, net.Conn) {
 
 	client, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
-		ln.Close()
+		_ = ln.Close()
 		t.Fatal(err)
 	}
 
 	server := <-ch
-	ln.Close()
+	_ = ln.Close()
 	t.Cleanup(func() {
-		client.Close()
-		server.Close()
+		_ = client.Close()
+		_ = server.Close()
 	})
 	return server, client
 }
@@ -220,7 +220,7 @@ func TestProxyE2E(t *testing.T) {
 	}
 	cid := strings.TrimSpace(string(containerID))
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", cid).Run()
+		_ = exec.Command("docker", "rm", "-f", cid).Run()
 	})
 
 	// Discover the mapped host port
@@ -243,7 +243,7 @@ func TestProxyE2E(t *testing.T) {
 	for time.Now().Before(deadline) {
 		conn, err := pgx.Connect(ctx, fmt.Sprintf("postgres://postgres:testpass@%s/postgres?sslmode=disable", pgAddr))
 		if err == nil {
-			conn.Close(ctx)
+			_ = conn.Close(ctx)
 			pgReady = true
 			break
 		}
@@ -284,7 +284,7 @@ func TestProxyE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connecting through proxy: %v", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	// Run SELECT 1
 	var result int
@@ -317,7 +317,7 @@ func startPostgresContainer(t *testing.T) (pgAddr string) {
 	}
 	cid := strings.TrimSpace(string(containerID))
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", cid).Run()
+		_ = exec.Command("docker", "rm", "-f", cid).Run()
 	})
 
 	portOut, err := exec.Command("docker", "port", cid, "5432/tcp").Output()
@@ -335,7 +335,7 @@ func startPostgresContainer(t *testing.T) (pgAddr string) {
 	for time.Now().Before(deadline) {
 		conn, err := pgx.Connect(ctx, fmt.Sprintf("postgres://postgres:testpass@%s/postgres?sslmode=disable", pgAddr))
 		if err == nil {
-			conn.Close(ctx)
+			_ = conn.Close(ctx)
 			return pgAddr
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -447,7 +447,7 @@ func TestGenerateDataWithVarcharConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connecting through proxy: %v", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	// Create a table with tight varchar constraints.
 	_, err = conn.Exec(ctx, `CREATE TABLE test1 (
@@ -675,7 +675,7 @@ func TestSyncE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connecting through proxy: %v", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	// Create test table
 	_, err = conn.Exec(ctx, `CREATE TABLE test1 (

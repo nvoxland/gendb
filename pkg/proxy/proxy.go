@@ -46,10 +46,6 @@ type session struct {
 	txStatus atomic.Int32 // 'I' = idle, 'T' = in transaction, 'E' = failed transaction
 }
 
-func (sess *session) getTxStatus() byte {
-	return byte(sess.txStatus.Load())
-}
-
 func (sess *session) setTxStatus(b byte) {
 	sess.txStatus.Store(int32(b))
 }
@@ -88,7 +84,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		p.listener.Close()
+		_ = p.listener.Close()
 	}()
 
 	for {
@@ -117,7 +113,7 @@ func (p *Proxy) Ready() <-chan struct{} {
 }
 
 func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	sess := &session{
 		backendParams: make(map[string]string),
@@ -144,7 +140,7 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	// Handle SSL request
 	if _, ok := startupMsg.(*pgproto3.SSLRequest); ok {
 		// Deny SSL
-		clientConn.Write([]byte("N"))
+		_, _ = clientConn.Write([]byte("N"))
 		slog.Debug("Denied SSL request, waiting for plaintext startup")
 		// Re-read the actual startup message
 		startupMsg, err = clientBackend.ReceiveStartupMessage()
@@ -161,10 +157,10 @@ func (p *Proxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 		p.sendError(clientConn, fmt.Sprintf("could not connect to backend: %v", err))
 		return
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 	defer func() {
 		if sess.pgxConn != nil {
-			sess.pgxConn.PgConn().Hijack()
+			_, _ = sess.pgxConn.PgConn().Hijack()
 		}
 	}()
 
@@ -301,18 +297,18 @@ func (sess *session) pauseRelay() {
 	sess.mu.Unlock()
 
 	// Interrupt any blocked read on backendConn.
-	sess.backendConn.SetReadDeadline(time.Now())
+	_ = sess.backendConn.SetReadDeadline(time.Now())
 
 	// Wait for relay goroutine to acknowledge pause.
 	<-sess.pauseConfirm
 
 	// Clear the expired deadline so the connection is usable for queries.
-	sess.backendConn.SetReadDeadline(time.Time{})
+	_ = sess.backendConn.SetReadDeadline(time.Time{})
 }
 
 // resumeRelay resumes the backend->client relay goroutine after a pause.
 func (sess *session) resumeRelay() {
-	sess.backendConn.SetReadDeadline(time.Time{}) // clear deadline
+	_ = sess.backendConn.SetReadDeadline(time.Time{}) // clear deadline
 	sess.mu.Lock()
 	sess.relayPaused = false
 	ch := sess.resumeCh
@@ -375,7 +371,7 @@ func (p *Proxy) createPgxConn(ctx context.Context, sess *session) (*pgx.Conn, er
 	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	config.Config.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	config.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return vConn, nil
 	}
 	pgxConn, err := pgx.ConnectConfig(ctx, config)
@@ -438,7 +434,7 @@ func (p *Proxy) sendResult(conn net.Conn, result *lang.Result) {
 		return
 	}
 
-	conn.Write(buf)
+	_, _ = conn.Write(buf)
 }
 
 func (p *Proxy) sendError(conn net.Conn, msg string) {
@@ -452,7 +448,7 @@ func (p *Proxy) sendError(conn net.Conn, msg string) {
 	rfq := &pgproto3.ReadyForQuery{TxStatus: 'I'}
 	buf, _ = rfq.Encode(buf)
 
-	conn.Write(buf)
+	_, _ = conn.Write(buf)
 }
 
 func (p *Proxy) relayUntilReady(clientBackend *pgproto3.Backend, clientConn, backendConn net.Conn, sess *session) error {
@@ -485,32 +481,44 @@ func (p *Proxy) relayUntilReady(clientBackend *pgproto3.Backend, clientConn, bac
 		case *pgproto3.ParameterStatus:
 			sess.backendParams[m.Name] = m.Value
 		case *pgproto3.AuthenticationCleartextPassword:
-			clientBackend.SetAuthType(pgproto3.AuthTypeCleartextPassword)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeCleartextPassword); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
 		case *pgproto3.AuthenticationMD5Password:
-			clientBackend.SetAuthType(pgproto3.AuthTypeMD5Password)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeMD5Password); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
 		case *pgproto3.AuthenticationSASL:
-			clientBackend.SetAuthType(pgproto3.AuthTypeSASL)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeSASL); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
 		case *pgproto3.AuthenticationSASLContinue:
-			clientBackend.SetAuthType(pgproto3.AuthTypeSASLContinue)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeSASLContinue); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
 		case *pgproto3.AuthenticationGSS:
-			clientBackend.SetAuthType(pgproto3.AuthTypeGSS)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeGSS); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
 		case *pgproto3.AuthenticationGSSContinue:
-			clientBackend.SetAuthType(pgproto3.AuthTypeGSSCont)
+			if err := clientBackend.SetAuthType(pgproto3.AuthTypeGSSCont); err != nil {
+				return fmt.Errorf("setting auth type: %w", err)
+			}
 			if err := p.relayClientAuth(clientBackend, backendConn, sess); err != nil {
 				return err
 			}
@@ -574,7 +582,7 @@ func SendNotice(conn net.Conn, message string) {
 		slog.Debug("Failed to encode NOTICE", "error", err)
 		return
 	}
-	conn.Write(buf)
+	_, _ = conn.Write(buf)
 }
 
 // extractQuery extracts the query string from a Query message.
@@ -619,9 +627,9 @@ func (p *Proxy) drainExtendedQuery(clientConn net.Conn, data []byte, n int) {
 	// Sync wasn't in the current buffer — read more until we find it.
 	drainBuf := make([]byte, 4096)
 	for {
-		clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		dn, err := clientConn.Read(drainBuf)
-		clientConn.SetReadDeadline(time.Time{})
+		_ = clientConn.SetReadDeadline(time.Time{})
 		if err != nil {
 			slog.Debug("drainExtendedQuery: read error while draining", "error", err)
 			return

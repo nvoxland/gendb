@@ -111,10 +111,6 @@ func (i *Inspector) InspectWithOptions(ctx context.Context, opts InspectOptions)
 	return &SchemaGraph{Tables: sorted, tableIndex: tableIndex}, nil
 }
 
-func (i *Inspector) getTables(ctx context.Context) ([]*Table, error) {
-	return i.getTablesWithOptions(ctx, InspectOptions{})
-}
-
 func (i *Inspector) getTablesWithOptions(ctx context.Context, opts InspectOptions) ([]*Table, error) {
 	excludeSchemas := []string{"pg_catalog", "information_schema"}
 	excludeSchemas = append(excludeSchemas, opts.ExcludeSchemas...)

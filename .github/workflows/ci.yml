@@ -23,6 +23,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+      - name: Start Ollama and pull model
+        run: |
+          ollama serve &
+          sleep 5
+          ollama pull qwen2.5:7b
       - run: go test -race -coverprofile=coverage.out ./...
 
   lint:

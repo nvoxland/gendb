@@ -538,7 +538,7 @@ func (g *Generator) FillColumn(ctx context.Context, conn *pgx.Conn, qualifiedTab
 	}
 
 	br := conn.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 	for range pkRows {
 		if _, err := br.Exec(); err != nil {
 			return fmt.Errorf("updating column %s: %w", col.Name, err)
