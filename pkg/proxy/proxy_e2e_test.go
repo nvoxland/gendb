@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -20,6 +21,13 @@ import (
 	"github.com/nvoxland/gendb/pkg/schema"
 	"github.com/nvoxland/gendb/pkg/synthetic"
 )
+
+func testModel() string {
+	if m := os.Getenv("GENDB_TEST_MODEL"); m != "" {
+		return m
+	}
+	return "qwen2.5:3b"
+}
 
 func TestConnFromContext(t *testing.T) {
 	ctx := context.Background()
@@ -394,7 +402,7 @@ func registerGenerateHandler(t *testing.T) {
 			}
 
 			// Create a test LLM client pointing to a local Ollama instance
-			testLLMClient := llm.NewClient("http://localhost:11434/v1", "llama3.2", "")
+			testLLMClient := llm.NewClient("http://localhost:11434/v1", testModel(), "")
 			gen, err := generator.New(testLLMClient, genCfg,
 				generator.WithTargetSchema(synthetic.SchemaName),
 				generator.WithTableNameMapper(mapper),
@@ -624,7 +632,7 @@ func TestSyncE2E(t *testing.T) {
 				}
 
 				genCfg := config.GenerationConfig{DefaultRows: 100}
-				testLLMClient := llm.NewClient("http://localhost:11434/v1", "llama3.2", "")
+				testLLMClient := llm.NewClient("http://localhost:11434/v1", testModel(), "")
 				gen, err := generator.New(testLLMClient, genCfg)
 				if err != nil {
 					return nil, fmt.Errorf("creating generator: %w", err)
