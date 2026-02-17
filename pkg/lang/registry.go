@@ -47,9 +47,7 @@ var Registry = map[string]*CommandDef{
 }
 
 // Aliases maps alternative command names to their canonical names.
-var Aliases = map[string]string{
-	"regenerate_data": "generate_data",
-}
+var Aliases = map[string]string{}
 
 // RegisterHandler sets the handler function for a registered command.
 func RegisterHandler(name string, handler HandlerFunc) {

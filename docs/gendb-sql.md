@@ -20,9 +20,6 @@ CALL gendb.generate_data(table_pattern => 'order*', rows => 1000, seed => 42);
 CALL gendb.generate_data();
 ```
 
-!!! note
-    `CALL gendb.regenerate_data(...)` is accepted as an alias for `CALL gendb.generate_data(...)`.
-
 ---
 
 ## Return Generated

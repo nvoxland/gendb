@@ -315,22 +315,6 @@ func TestParseSyncWithBoth(t *testing.T) {
 	}
 }
 
-func TestParseRegenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL gendb.regenerate_data(table_pattern => 'users', rows => 200)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd.Name != "generate_data" {
-		t.Fatalf("expected generate_data (resolved alias), got %q", cmd.Name)
-	}
-	if cmd.Args["table_pattern"] != "users" {
-		t.Errorf("got table_pattern %q, want users", cmd.Args["table_pattern"])
-	}
-	if cmd.Args["rows"] != "200" {
-		t.Errorf("got rows %q, want 200", cmd.Args["rows"])
-	}
-}
-
 func TestParseUnknownParameter(t *testing.T) {
 	_, err := Parse("CALL gendb.generate_data(table_pattern => 'users', bogus => 'value')")
 	if err == nil {
