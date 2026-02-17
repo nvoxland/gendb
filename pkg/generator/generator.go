@@ -124,6 +124,23 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 			}
 		}
 
+		// Fallback: query real FK values from the database when pkValues has no data
+		for _, col := range table.Columns {
+			if len(fkValues[col.Name]) == 0 && g.inspector != nil {
+				refTable := fkTarget(table, col.Name)
+				if refTable == "" {
+					continue
+				}
+				refCol := fkRefCol(table, col.Name)
+				vals, err := g.inspector.QueryFKValues(ctx, table.Schema, refTable, refCol, 200)
+				if err != nil {
+					slog.Warn("Failed to query FK values from database", "table", table.Name, "column", col.Name, "error", err)
+				} else if len(vals) > 0 {
+					fkValues[col.Name] = vals
+				}
+			}
+		}
+
 		// Gather stats and sample rows if inspector is available
 		var tableStats *schema.TableStats
 		var sampleRows []map[string]any

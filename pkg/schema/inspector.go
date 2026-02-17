@@ -596,6 +596,37 @@ func formatNum(f float64) string {
 	return fmt.Sprintf("%.1f", f)
 }
 
+// QueryFKValues returns up to `limit` distinct values from the given column,
+// used to resolve foreign key references against pre-existing data.
+func (i *Inspector) QueryFKValues(ctx context.Context, schemaName, tableName, columnName string, limit int) ([]any, error) {
+	query := fmt.Sprintf("SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL LIMIT %d",
+		pgx.Identifier{columnName}.Sanitize(),
+		pgx.Identifier{schemaName, tableName}.Sanitize(),
+		pgx.Identifier{columnName}.Sanitize(),
+		limit,
+	)
+
+	rows, err := i.conn.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("querying FK values from %s.%s.%s: %w", schemaName, tableName, columnName, err)
+	}
+	defer rows.Close()
+
+	var vals []any
+	for rows.Next() {
+		var v any
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("scanning FK value from %s.%s: %w", tableName, columnName, err)
+		}
+		vals = append(vals, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return vals, nil
+}
+
 // SampleRows returns a random sample of rows from the table.
 // Returns nil if the table is empty.
 func (i *Inspector) SampleRows(ctx context.Context, table *Table, n int) ([]map[string]any, error) {
