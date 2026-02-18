@@ -1,0 +1,6 @@
+nav:
+  - Home: index.md
+  - Getting Started: getting-started
+  - User Guide: guide
+  - Blog: blog
+  - ...

@@ -29,4 +29,4 @@ CALL gendb.return_actual(table_name => 'users');
 -- queries against "users" return real data again
 ```
 
-[Get started →](getting-started.md)
+[Get started →](getting-started/index.md)

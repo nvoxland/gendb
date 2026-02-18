@@ -1,0 +1,7 @@
+nav:
+  - CLI Reference: cli.md
+  - GENDB SQL Reference: gendb-sql.md
+  - Configuration: configuration.md
+  - LLM Setup: llm.md
+  - Data Generators: generators.md
+  - Proxy: proxy.md

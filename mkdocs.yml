@@ -1,6 +1,8 @@
 site_name: GenDB
 site_description: LLM-driven synthetic database for development & testing
 site_url: https://nvoxland.github.io/gendb/
+repo_url: https://github.com/nvoxland/gendb
+repo_name: nvoxland/gendb
 
 theme:
   name: material
@@ -22,18 +24,28 @@ theme:
   features:
     - content.code.copy
     - content.tabs.link
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
     - navigation.sections
     - navigation.expand
     - navigation.top
+    - search.suggest
     - search.highlight
 
 plugins:
   - search
+  - awesome-pages
+  - blog
 
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -42,14 +54,3 @@ markdown_extensions:
   - pymdownx.snippets
   - attr_list
   - tables
-
-nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - CLI Reference: cli.md
-  - GENDB SQL Reference: gendb-sql.md
-  - Configuration: configuration.md
-  - LLM Setup: llm.md
-  - Data Generators: generators.md
-  - Proxy: proxy.md
-  - How It Works: how-it-works.md

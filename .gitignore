@@ -5,3 +5,6 @@ gendb.yaml
 .idea
 site
 *.iml
+gendb
+todo
+TODO.txt

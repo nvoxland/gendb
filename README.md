@@ -49,6 +49,11 @@ CALL gendb.return_generated(table_name => 'users');
 CALL gendb.return_actual(table_name => 'users');
 ```
 
+
+## Documentation
+
+Full docs are available at [nvoxland.github.io/gendb](https://nvoxland.github.io/gendb/).
+
 ## Building from Source
 
 ```bash
@@ -65,14 +70,13 @@ make lint       # run golangci-lint
 make clean      # remove build artifacts
 ```
 
-## Documentation
-
-Full docs are available at [nvoxland.github.io/gendb](https://nvoxland.github.io/gendb/).
-
-To build/serve docs locally (requires [MkDocs](https://www.mkdocs.org/) and the Material theme):
+To test the docs site locally:
 
 ```bash
-## Serves at http://localhost:8000
+# Build the docs image
+docker build -t gendb-docs .
+
+# Serve at http://localhost:8000 with live reload
 docker run --rm -it -p 8000:8000 -v ${PWD}:/docs $(docker build -q .)
 ```
 

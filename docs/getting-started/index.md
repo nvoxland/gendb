@@ -6,23 +6,6 @@
 - **PostgreSQL** — a real database to introspect
 - **Ollama** (recommended for local LLM) — or an OpenAI API key
 
-## Installation
-
-### From source
-
-```bash
-go install github.com/nvoxland/gendb/cmd/gendb@latest
-```
-
-### Build locally
-
-```bash
-git clone https://github.com/nvoxland/gendb.git
-cd gendb
-make build
-# binary is at bin/gendb
-```
-
 ## Walkthrough
 
 ### 1. Start the proxy
@@ -56,8 +39,8 @@ CALL gendb.return_actual(table_name => 'users');
 
 ## Next Steps
 
-- [CLI Reference](cli.md) — all commands and flags
-- [GENDB SQL Reference](gendb-sql.md) — the full DSL
-- [Configuration](configuration.md) — customize `gendb.yaml`
-- [LLM Setup](llm.md) — configure Ollama, OpenAI, or custom providers
-- [Data Generators](generators.md) — available generators and how they're selected
+- [CLI Reference](../guide/cli.md) — all commands and flags
+- [GENDB SQL Reference](../guide/gendb-sql.md) — the full DSL
+- [Configuration](../guide/configuration.md) — customize `gendb.yaml`
+- [LLM Setup](../guide/llm.md) — configure Ollama, OpenAI, or custom providers
+- [Data Generators](../guide/generators.md) — available generators and how they're selected

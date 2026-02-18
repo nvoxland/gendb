@@ -4,17 +4,23 @@ This page describes GenDB's architecture and internal mechanics.
 
 ## Architecture Overview
 
-```
-┌──────────────┐     ┌──────────────────────────┐     ┌──────────────────────┐
-│              │     │      GenDB Proxy          │     │   Real PostgreSQL    │
-│  Application ├────►│                           ├────►│                      │
-│  (psql, app) │     │  ┌────────────────────┐   │     │  ├── public.users    │
-│              │◄────┤  │ GENDB SQL Engine    │   │◄────┤  ├── public.orders   │
-└──────────────┘     │  │ - Parse DSL         │   │     │  ├── public_gendb    │
-                     │  │ - Generate data     │   │     │  │   ├── .users      │
-                     │  │ - Temp view routing  │   │     │  │   └── .orders     │
-                     │  └────────────────────┘   │     └──────────────────────┘
-                     └──────────────────────────┘
+```mermaid
+flowchart LR
+    App["Application\n(psql, app)"] <--> Proxy
+
+    subgraph Proxy["GenDB Proxy"]
+        Engine["GENDB SQL Engine\n- Parse DSL\n- Generate data\n- Temp view routing"]
+    end
+
+    Proxy <--> PG
+
+    subgraph PG["Real PostgreSQL"]
+        direction TB
+        public_users["public.users"]
+        public_orders["public.orders"]
+        gendb_users["public_gendb.users"]
+        gendb_orders["public_gendb.orders"]
+    end
 ```
 
 ## Schema-Based Synthetic Database
