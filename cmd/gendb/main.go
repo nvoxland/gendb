@@ -15,8 +15,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gendb",
-	Short: "GenDB — synthetic database for development & testing",
+	Use:     "gendb",
+	Short:   "GenDB — synthetic database for development & testing",
+	Version: Version,
 	Long: `GenDB creates a synthetic PostgreSQL database with LLM-analyzed synthetic data.
 Developers can work against realistic data without production PII.`,
 }

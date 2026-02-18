@@ -3,6 +3,8 @@ version: 2
 builds:
   - main: ./cmd/gendb
     binary: gendb
+    ldflags:
+      - -X main.Version={{ .Version }}
     goos:
       - linux
       - darwin

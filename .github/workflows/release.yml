@@ -1,3 +1,14 @@
+# Release workflow — builds and publishes binaries via GoReleaser.
+#
+# How to create a release:
+#   1. Ensure all changes are merged to main and CI is green.
+#   2. Tag the commit:  git tag v1.2.3
+#   3. Push the tag:    git push origin v1.2.3
+#   4. This workflow triggers automatically on the pushed tag,
+#      builds cross-platform binaries, and creates a GitHub Release.
+#
+# The GoReleaser configuration lives in .goreleaser.yml at the repo root.
+
 name: release
 
 on:
