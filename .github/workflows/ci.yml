@@ -23,9 +23,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
-      - uses: pydantic/ollama-action@v3
-        with:
-          model: qwen2.5:3b
+      - uses: ai-action/setup-ollama@v1
+      - run: ollama pull qwen2.5:3b
       - run: go test -race -coverprofile=coverage.out ./...
 
   lint:
