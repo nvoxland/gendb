@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"sort"
 
 	"github.com/nvoxland/gendb/pkg/config"
 	"github.com/nvoxland/gendb/pkg/generator"
@@ -125,7 +125,8 @@ func initLogging(level string) {
 	slog.SetDefault(slog.New(handler))
 }
 
-func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, error) {
+func handleGenerate(ctx context.Context, args map[string]string) (result *lang.Result, retErr error) {
+	startTime := time.Now()
 	conn := proxy.ConnFromContext(ctx)
 	if conn == nil {
 		return nil, fmt.Errorf("no database connection available")
@@ -135,6 +136,19 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 	exclude := args["exclude_tables"]
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
+
+	defer func() {
+		status, errMsg := "success", ""
+		if retErr != nil {
+			status, errMsg = "error", retErr.Error()
+		}
+		details := map[string]any{
+			"include_tables": include,
+			"exclude_tables": exclude,
+			"rows":           rows,
+		}
+		recordHistory(ctx, conn, "generate_data", scenario, details, status, errMsg, time.Since(startTime))
+	}()
 	includeSampleData := true
 	if v, ok := args["include_sample_data"]; ok && (v == "false" || v == "f") {
 		includeSampleData = false
@@ -240,7 +254,8 @@ func handleGenerate(ctx context.Context, args map[string]string) (*lang.Result, 
 	return &lang.Result{Tag: fmt.Sprintf("GENDB GENERATE DATA (%d tables, %d rows)", totalTables, totalRows)}, nil
 }
 
-func handleSync(ctx context.Context, args map[string]string) (*lang.Result, error) {
+func handleSync(ctx context.Context, args map[string]string) (result *lang.Result, retErr error) {
+	startTime := time.Now()
 	conn := proxy.ConnFromContext(ctx)
 	if conn == nil {
 		return nil, fmt.Errorf("no database connection available")
@@ -248,6 +263,17 @@ func handleSync(ctx context.Context, args map[string]string) (*lang.Result, erro
 
 	table := args["table_name"]
 	scenario := args["scenario"]
+
+	defer func() {
+		status, errMsg := "success", ""
+		if retErr != nil {
+			status, errMsg = "error", retErr.Error()
+		}
+		details := map[string]any{
+			"table_name": table,
+		}
+		recordHistory(ctx, conn, "sync", scenario, details, status, errMsg, time.Since(startTime))
+	}()
 
 	inspector := schema.NewInspectorFromConn(conn)
 
@@ -472,7 +498,19 @@ func logTokenUsage(ctx context.Context, client *llm.Client) {
 	}
 }
 
-func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Result, error) {
+func recordHistory(ctx context.Context, conn *pgx.Conn, operation, scenario string, details map[string]any, status string, errMsg string, duration time.Duration) {
+	detailsJSON, _ := json.Marshal(details)
+	_, err := conn.Exec(ctx,
+		`INSERT INTO gendb.history (operation, scenario, details, status, error_message, duration_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		operation, scenario, detailsJSON, status, errMsg, duration.Milliseconds())
+	if err != nil {
+		slog.Warn("Failed to record history", "error", err)
+	}
+}
+
+func handleDropScenario(ctx context.Context, args map[string]string) (result *lang.Result, retErr error) {
+	startTime := time.Now()
 	conn := proxy.ConnFromContext(ctx)
 	if conn == nil {
 		return nil, fmt.Errorf("no database connection available")
@@ -483,6 +521,19 @@ func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Resu
 
 	slog.Info("Handling drop_scenario", "scenario", scenario, "schema", schemaFilter)
 
+	var toDrop []string
+	defer func() {
+		status, errMsg := "success", ""
+		if retErr != nil {
+			status, errMsg = "error", retErr.Error()
+		}
+		details := map[string]any{
+			"schema":         schemaFilter,
+			"tables_dropped": len(toDrop),
+		}
+		recordHistory(ctx, conn, "drop_scenario", scenario, details, status, errMsg, time.Since(startTime))
+	}()
+
 	// List all tables in the gendb schema
 	rows, err := conn.Query(ctx, `
 		SELECT table_name FROM information_schema.tables
@@ -492,7 +543,6 @@ func handleDropScenario(ctx context.Context, args map[string]string) (*lang.Resu
 		return nil, fmt.Errorf("listing synthetic tables: %w", err)
 	}
 
-	var toDrop []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {

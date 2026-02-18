@@ -66,6 +66,19 @@ func BuildSetupSQL() string {
 	b.WriteString(" current_setting('gendb.info.structured_output', true)::boolean AS structured_output;\n")
 	b.WriteString("COMMENT ON VIEW gendb.info IS 'GenDB proxy instance information (version, LLM configuration).';\n")
 
+	// History table for tracking operations.
+	b.WriteString("\nCREATE TABLE IF NOT EXISTS gendb.history (\n")
+	b.WriteString("    id BIGSERIAL PRIMARY KEY,\n")
+	b.WriteString("    executed_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n")
+	b.WriteString("    operation TEXT NOT NULL,\n")
+	b.WriteString("    scenario TEXT,\n")
+	b.WriteString("    details JSONB,\n")
+	b.WriteString("    status TEXT NOT NULL,\n")
+	b.WriteString("    error_message TEXT,\n")
+	b.WriteString("    duration_ms BIGINT\n")
+	b.WriteString(");\n")
+	b.WriteString("COMMENT ON TABLE gendb.history IS 'Tracks operations performed by GenDB (generate_data, sync, drop_scenario, etc.).';\n")
+
 	return b.String()
 }
 
