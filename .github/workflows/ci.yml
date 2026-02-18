@@ -4,7 +4,17 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "Dockerfile"
+      - "*.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "Dockerfile"
+      - "*.md"
 
 jobs:
   build:
