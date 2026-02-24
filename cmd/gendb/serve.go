@@ -132,10 +132,16 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 		return nil, fmt.Errorf("no database connection available")
 	}
 
-	include := args["include_tables"]
-	exclude := args["exclude_tables"]
+	include := args["include"]
+	exclude := args["exclude"]
 	rows, _ := strconv.Atoi(args["rows"]) // zero if missing or invalid
 	scenario := args["scenario"]
+	if scenario == "" {
+		scenario = synthetic.DefaultScenario
+	}
+	if rows == 0 {
+		rows = appConfig.Generation.DefaultRows
+	}
 
 	defer func() {
 		status, errMsg := "success", ""
@@ -143,9 +149,9 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 			status, errMsg = "error", retErr.Error()
 		}
 		details := map[string]any{
-			"include_tables": include,
-			"exclude_tables": exclude,
-			"rows":           rows,
+			"include": include,
+			"exclude": exclude,
+			"rows":    rows,
 		}
 		recordHistory(ctx, conn, "generate_data", scenario, details, status, errMsg, time.Since(startTime))
 	}()
@@ -154,7 +160,7 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 		includeSampleData = false
 	}
 
-	slog.Info("Handling generate_data", "include_tables", include, "exclude_tables", exclude, "rows", rows, "scenario", scenario, "include_sample_data", includeSampleData)
+	slog.Info("Handling generate_data", "include", include, "exclude", exclude, "rows", rows, "scenario", scenario, "include_sample_data", includeSampleData)
 
 	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
@@ -451,18 +457,29 @@ func handleReturnGenerated(ctx context.Context, args map[string]string) (*lang.R
 		return nil, fmt.Errorf("no database connection available")
 	}
 
-	table := args["table_name"]
+	include := args["include"]
+	exclude := args["exclude"]
 	scenario := args["scenario"]
-	syntheticTable := synthetic.SyntheticTableName(scenario, "public", table)
-	_, err := conn.Exec(ctx, fmt.Sprintf(
-		"CREATE OR REPLACE TEMP VIEW %s AS SELECT * FROM %s",
-		pgx.Identifier{table}.Sanitize(),
-		pgx.Identifier{synthetic.SchemaName, syntheticTable}.Sanitize(),
-	))
+	if scenario == "" {
+		scenario = synthetic.DefaultScenario
+	}
+
+	tables, err := discoverSyntheticTables(ctx, conn, include, exclude, scenario)
 	if err != nil {
 		return nil, err
 	}
-	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN GENERATED %s", table)}, nil
+
+	for _, st := range tables {
+		_, err := conn.Exec(ctx, fmt.Sprintf(
+			"CREATE OR REPLACE TEMP VIEW %s AS SELECT * FROM %s",
+			pgx.Identifier{st.sourceTable}.Sanitize(),
+			pgx.Identifier{synthetic.SchemaName, st.syntheticName}.Sanitize(),
+		))
+		if err != nil {
+			return nil, fmt.Errorf("creating view for %s: %w", st.sourceTable, err)
+		}
+	}
+	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN GENERATED (%d tables)", len(tables))}, nil
 }
 
 func handleReturnActual(ctx context.Context, args map[string]string) (*lang.Result, error) {
@@ -471,15 +488,74 @@ func handleReturnActual(ctx context.Context, args map[string]string) (*lang.Resu
 		return nil, fmt.Errorf("no database connection available")
 	}
 
-	table := args["table_name"]
-	_, err := conn.Exec(ctx, fmt.Sprintf(
-		"DROP VIEW IF EXISTS pg_temp.%s",
-		pgx.Identifier{table}.Sanitize(),
-	))
+	include := args["include"]
+	exclude := args["exclude"]
+	scenario := args["scenario"]
+	if scenario == "" {
+		scenario = synthetic.DefaultScenario
+	}
+
+	tables, err := discoverSyntheticTables(ctx, conn, include, exclude, scenario)
 	if err != nil {
 		return nil, err
 	}
-	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL %s", table)}, nil
+
+	for _, st := range tables {
+		_, err := conn.Exec(ctx, fmt.Sprintf(
+			"DROP VIEW IF EXISTS pg_temp.%s",
+			pgx.Identifier{st.sourceTable}.Sanitize(),
+		))
+		if err != nil {
+			return nil, fmt.Errorf("dropping view for %s: %w", st.sourceTable, err)
+		}
+	}
+	return &lang.Result{Tag: fmt.Sprintf("GENDB RETURN ACTUAL (%d tables)", len(tables))}, nil
+}
+
+type syntheticTableInfo struct {
+	syntheticName string
+	sourceTable   string
+}
+
+// discoverSyntheticTables queries the gendb schema for synthetic tables and filters
+// by scenario, include, and exclude patterns.
+func discoverSyntheticTables(ctx context.Context, conn *pgx.Conn, include, exclude, scenario string) ([]syntheticTableInfo, error) {
+	rows, err := conn.Query(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+	`, synthetic.SchemaName)
+	if err != nil {
+		return nil, fmt.Errorf("listing synthetic tables: %w", err)
+	}
+
+	var result []syntheticTableInfo
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning synthetic table name: %w", err)
+		}
+
+		sc, _, sourceTable, ok := synthetic.ParseSyntheticTableName(name)
+		if !ok {
+			continue
+		}
+		if sc != scenario {
+			continue
+		}
+		if include != "" && !generator.MatchPattern(sourceTable, include) {
+			continue
+		}
+		if exclude != "" && generator.MatchPattern(sourceTable, exclude) {
+			continue
+		}
+		result = append(result, syntheticTableInfo{syntheticName: name, sourceTable: sourceTable})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func logTokenUsage(ctx context.Context, client *llm.Client) {

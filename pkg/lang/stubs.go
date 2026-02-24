@@ -1,6 +1,8 @@
 package lang
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -42,6 +44,14 @@ func BuildSetupSQL() string {
 		procs = append(procs, procEntry{alias, Registry[canonical]})
 	}
 
+	// Bulk-drop all existing procedures in the gendb schema so that stale
+	// signatures (e.g. from renamed parameters) don't cause "not unique" errors.
+	b.WriteString("\nDO $$ DECLARE r RECORD; BEGIN\n")
+	b.WriteString("  FOR r IN SELECT oid::regprocedure::text AS sig\n")
+	b.WriteString("           FROM pg_proc WHERE pronamespace = 'gendb'::regnamespace\n")
+	b.WriteString("  LOOP EXECUTE 'DROP PROCEDURE IF EXISTS ' || r.sig; END LOOP;\n")
+	b.WriteString("END $$;\n")
+
 	// Emit DROP + CREATE PROCEDURE and COMMENT for each entry.
 	// DROP is needed because CREATE OR REPLACE cannot rename parameters.
 	for _, p := range procs {
@@ -79,7 +89,39 @@ func BuildSetupSQL() string {
 	b.WriteString(");\n")
 	b.WriteString("COMMENT ON TABLE gendb.history IS 'Tracks operations performed by GenDB (generate_data, sync, drop_scenario, etc.).';\n")
 
+	// Stamp the schema with a fingerprint so we can skip reinstallation
+	// when the stubs haven't changed.
+	fp := setupSQLFingerprint(b.String())
+	b.WriteString(fmt.Sprintf("\nCOMMENT ON SCHEMA gendb IS 'gendb-stubs:%s';\n", fp))
+
 	return b.String()
+}
+
+// SetupSQLFingerprint returns the fingerprint that will be stamped on the
+// gendb schema comment after a successful stub installation. It can be
+// compared against the existing schema comment to decide whether reinstallation
+// is necessary.
+func SetupSQLFingerprint() string {
+	// Build the SQL without the comment line, then hash it — same logic
+	// used inside BuildSetupSQL before appending the COMMENT.
+	full := BuildSetupSQL()
+	// The fingerprint is embedded in the output, so we can extract it
+	// from the built SQL. But it's simpler to just recompute from scratch.
+	// We compute it the same way: hash everything before the final COMMENT line.
+	return setupSQLFingerprint(stripTrailingComment(full))
+}
+
+func setupSQLFingerprint(body string) string {
+	h := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(h[:])[:16]
+}
+
+func stripTrailingComment(sql string) string {
+	idx := strings.LastIndex(sql, "\nCOMMENT ON SCHEMA gendb IS 'gendb-stubs:")
+	if idx == -1 {
+		return sql
+	}
+	return sql[:idx]
 }
 
 // BuildInfoSQL returns SQL that sets session-scoped GUC variables with runtime

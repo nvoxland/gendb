@@ -12,17 +12,17 @@ Commands are case-insensitive. Trailing semicolons are optional.
 
 Generate synthetic rows for one or more tables, or all tables if no arguments are given. Data is inserted into the synthetic schema.
 
-Use `include_tables` to limit generation to matching tables and `exclude_tables` to skip matching tables. Both support glob-like matching (`*` and `?` as wildcards) — for example, `user*` matches `users` and `user_roles`. Either, both, or neither can be specified.
+Use `include` to limit generation to matching tables and `exclude` to skip matching tables. Both support glob-like matching (`*` and `?` as wildcards) — for example, `user*` matches `users` and `user_roles`. Either, both, or neither can be specified.
 
 ```sql
-CALL gendb.generate_data(include_tables => 'users', rows => 500);
-CALL gendb.generate_data(include_tables => 'order*', rows => 1000, seed => 42);
+CALL gendb.generate_data(include => 'users', rows => 500);
+CALL gendb.generate_data(include => 'order*', rows => 1000, seed => 42);
 
 -- Generate for all tables except audit logs
-CALL gendb.generate_data(exclude_tables => '*_log');
+CALL gendb.generate_data(exclude => '*_log');
 
 -- Combine: include user tables, but exclude user_logs
-CALL gendb.generate_data(include_tables => 'user*', exclude_tables => 'user_logs');
+CALL gendb.generate_data(include => 'user*', exclude => 'user_logs');
 
 -- Generate rows for all tables
 CALL gendb.generate_data();
@@ -32,28 +32,44 @@ CALL gendb.generate_data();
 
 ## Return Generated
 
-### `CALL gendb.return_generated(table_name => '...')`
+### `CALL gendb.return_generated(...)`
 
-Route queries for a table to the generated (synthetic) data. Creates a temporary view that overlays the real table, so subsequent queries against that table name return generated data.
+Route queries for one or more tables to the generated (synthetic) data. Creates temporary views that overlay the real tables, so subsequent queries against those table names return generated data.
+
+Use `include` and `exclude` the same way as `generate_data` — both support glob patterns. With no arguments, all tables with synthetic data are routed.
 
 ```sql
-CALL gendb.return_generated(table_name => 'users');
+CALL gendb.return_generated(include => 'users');
+
+-- Route all tables with synthetic data
+CALL gendb.return_generated();
+
+-- Route user-related tables except user_logs
+CALL gendb.return_generated(include => 'user*', exclude => 'user_logs');
 
 -- Now: SELECT * FROM users  →  returns generated data
 ```
 
-The temporary view only affects the current session. Other connections are unaffected.
+The temporary views only affect the current session. Other connections are unaffected.
 
 ---
 
 ## Return Actual
 
-### `CALL gendb.return_actual(table_name => '...')`
+### `CALL gendb.return_actual(...)`
 
-Restore a table to return real data. Drops the temporary view created by `return_generated`, so queries resolve against the real table again.
+Restore one or more tables to return real data. Drops the temporary views created by `return_generated`, so queries resolve against the real tables again.
+
+Uses the same `include`/`exclude` pattern matching. With no arguments, all tables with synthetic data are restored.
 
 ```sql
-CALL gendb.return_actual(table_name => 'users');
+CALL gendb.return_actual(include => 'users');
+
+-- Restore all tables
+CALL gendb.return_actual();
+
+-- Restore user-related tables except user_logs
+CALL gendb.return_actual(include => 'user*', exclude => 'user_logs');
 
 -- Now: SELECT * FROM users  →  returns real data
 ```

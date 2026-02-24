@@ -9,9 +9,9 @@ func TestIsGenDBCommand(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"CALL gendb.generate_data(include_tables => 'users')", true},
-		{"call gendb.return_generated(table_name => 'users')", true},
-		{"  CALL gendb.return_actual(table_name => 'users')", true},
+		{"CALL gendb.generate_data(include => 'users')", true},
+		{"call gendb.return_generated(include => 'users')", true},
+		{"  CALL gendb.return_actual(include => 'users')", true},
 		{"SELECT * FROM users", false},
 		{"CALL other.", false},
 		{"CALL", false},
@@ -27,15 +27,15 @@ func TestIsGenDBCommand(t *testing.T) {
 }
 
 func TestParseGenerateTable(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users', rows => 500)")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users', rows => 500)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "users" {
-		t.Errorf("got include_tables %q, want users", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 	if cmd.Args["rows"] != "500" {
 		t.Errorf("got rows %q, want 500", cmd.Args["rows"])
@@ -46,7 +46,7 @@ func TestParseGenerateTable(t *testing.T) {
 }
 
 func TestParseGenerateTableWithSeed(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users', rows => 500, seed => 42)")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users', rows => 500, seed => 42)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,21 +66,21 @@ func TestParseGenerateAll(t *testing.T) {
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "" {
-		t.Errorf("expected empty include_tables for all-tables generate, got %q", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "" {
+		t.Errorf("expected empty include for all-tables generate, got %q", cmd.Args["include"])
 	}
 }
 
 func TestParseGenerateDataNoRows(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users')")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "users" {
-		t.Errorf("got include_tables %q, want users", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 	if _, ok := cmd.Args["rows"]; ok {
 		t.Errorf("expected no rows arg, got %q", cmd.Args["rows"])
@@ -88,38 +88,38 @@ func TestParseGenerateDataNoRows(t *testing.T) {
 }
 
 func TestParseSemicolon(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users');")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users');")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Name != "generate_data" || cmd.Args["include_tables"] != "users" {
+	if cmd.Name != "generate_data" || cmd.Args["include"] != "users" {
 		t.Error("expected generate_data for users")
 	}
 }
 
 func TestParseGenerateDataDoubleQuotedTableName(t *testing.T) {
-	cmd, err := Parse(`CALL gendb.generate_data(include_tables => "test1")`)
+	cmd, err := Parse(`CALL gendb.generate_data(include => "test1")`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "test1" {
-		t.Errorf("got include_tables %q, want test1", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "test1" {
+		t.Errorf("got include %q, want test1", cmd.Args["include"])
 	}
 }
 
 func TestParseGenerateDataDoubleQuotedWithRows(t *testing.T) {
-	cmd, err := Parse(`CALL gendb.generate_data(include_tables => "test1", rows => 100)`)
+	cmd, err := Parse(`CALL gendb.generate_data(include => "test1", rows => 100)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "test1" {
-		t.Errorf("got include_tables %q, want test1", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "test1" {
+		t.Errorf("got include %q, want test1", cmd.Args["include"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -134,73 +134,85 @@ func TestParseInvalidCommand(t *testing.T) {
 }
 
 func TestParseReturnGenerated(t *testing.T) {
-	cmd, err := Parse("CALL gendb.return_generated(table_name => 'test1')")
+	cmd, err := Parse("CALL gendb.return_generated(include => 'test1')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "return_generated" {
 		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "test1" {
-		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
+	if cmd.Args["include"] != "test1" {
+		t.Errorf("got include %q, want test1", cmd.Args["include"])
 	}
 }
 
-func TestParseReturnGeneratedMissingTable(t *testing.T) {
-	_, err := Parse("CALL gendb.return_generated()")
-	if err == nil {
-		t.Error("expected parse error for missing table_name")
+func TestParseReturnGeneratedNoArgs(t *testing.T) {
+	cmd, err := Parse("CALL gendb.return_generated()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "return_generated" {
+		t.Fatalf("expected return_generated, got %q", cmd.Name)
+	}
+	if cmd.Args["include"] != "" {
+		t.Errorf("expected empty include, got %q", cmd.Args["include"])
 	}
 }
 
 func TestParseReturnGeneratedCaseInsensitive(t *testing.T) {
-	cmd, err := Parse("call gendb.Return_Generated(table_name => 'users')")
+	cmd, err := Parse("call gendb.Return_Generated(include => 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "return_generated" {
 		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "users" {
-		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 }
 
 func TestParseReturnActual(t *testing.T) {
-	cmd, err := Parse("CALL gendb.return_actual(table_name => 'test1')")
+	cmd, err := Parse("CALL gendb.return_actual(include => 'test1')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "return_actual" {
 		t.Fatalf("expected return_actual, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "test1" {
-		t.Errorf("got table_name %q, want test1", cmd.Args["table_name"])
+	if cmd.Args["include"] != "test1" {
+		t.Errorf("got include %q, want test1", cmd.Args["include"])
 	}
 }
 
-func TestParseReturnActualMissingTable(t *testing.T) {
-	_, err := Parse("CALL gendb.return_actual()")
-	if err == nil {
-		t.Error("expected parse error for missing table_name")
+func TestParseReturnActualNoArgs(t *testing.T) {
+	cmd, err := Parse("CALL gendb.return_actual()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "return_actual" {
+		t.Fatalf("expected return_actual, got %q", cmd.Name)
+	}
+	if cmd.Args["include"] != "" {
+		t.Errorf("expected empty include, got %q", cmd.Args["include"])
 	}
 }
 
 func TestParseReturnActualCaseInsensitive(t *testing.T) {
-	cmd, err := Parse("call gendb.Return_Actual(table_name => 'orders')")
+	cmd, err := Parse("call gendb.Return_Actual(include => 'orders')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "return_actual" {
 		t.Fatalf("expected return_actual, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "orders" {
-		t.Errorf("got table_name %q, want orders", cmd.Args["table_name"])
+	if cmd.Args["include"] != "orders" {
+		t.Errorf("got include %q, want orders", cmd.Args["include"])
 	}
 }
 
 func TestParseGenerateDataWithScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users', rows => 100, scenario => 'edge')")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users', rows => 100, scenario => 'edge')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +225,7 @@ func TestParseGenerateDataWithScenario(t *testing.T) {
 }
 
 func TestParseGenerateDataWithoutScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'users', rows => 100)")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'users', rows => 100)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +238,7 @@ func TestParseGenerateDataWithoutScenario(t *testing.T) {
 }
 
 func TestParseReturnGeneratedWithScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.return_generated(table_name => 'users', scenario => 'edge')")
+	cmd, err := Parse("CALL gendb.return_generated(include => 'users', scenario => 'edge')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +251,7 @@ func TestParseReturnGeneratedWithScenario(t *testing.T) {
 }
 
 func TestParseReturnActualWithScenario(t *testing.T) {
-	cmd, err := Parse("CALL gendb.return_actual(table_name => 'users', scenario => 'edge')")
+	cmd, err := Parse("CALL gendb.return_actual(include => 'users', scenario => 'edge')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +328,7 @@ func TestParseSyncWithBoth(t *testing.T) {
 }
 
 func TestParseUnknownParameter(t *testing.T) {
-	_, err := Parse("CALL gendb.generate_data(include_tables => 'users', bogus => 'value')")
+	_, err := Parse("CALL gendb.generate_data(include => 'users', bogus => 'value')")
 	if err == nil {
 		t.Error("expected parse error for unknown parameter")
 	}
@@ -327,8 +339,8 @@ func TestParsePositionalArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Args["include_tables"] != "users" {
-		t.Errorf("got include_tables %q, want users", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -336,15 +348,15 @@ func TestParsePositionalArgs(t *testing.T) {
 }
 
 func TestParseMixedArgs(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data('users', exclude_tables => 'temp*', rows => 100)")
+	cmd, err := Parse("CALL gendb.generate_data('users', exclude => 'temp*', rows => 100)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Args["include_tables"] != "users" {
-		t.Errorf("got include_tables %q, want users", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
-	if cmd.Args["exclude_tables"] != "temp*" {
-		t.Errorf("got exclude_tables %q, want temp*", cmd.Args["exclude_tables"])
+	if cmd.Args["exclude"] != "temp*" {
+		t.Errorf("got exclude %q, want temp*", cmd.Args["exclude"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -356,8 +368,8 @@ func TestParsePositionalWithNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cmd.Args["include_tables"]; ok {
-		t.Errorf("expected no include_tables for NULL, got %q", cmd.Args["include_tables"])
+	if _, ok := cmd.Args["include"]; ok {
+		t.Errorf("expected no include for NULL, got %q", cmd.Args["include"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -365,17 +377,17 @@ func TestParsePositionalWithNull(t *testing.T) {
 }
 
 func TestParseColonEqualsNotation(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables := 'users')")
+	cmd, err := Parse("CALL gendb.generate_data(include := 'users')")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Args["include_tables"] != "users" {
-		t.Errorf("got include_tables %q, want users", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 }
 
 func TestParseNamedThenPositionalError(t *testing.T) {
-	_, err := Parse("CALL gendb.generate_data(include_tables => 'users', 100)")
+	_, err := Parse("CALL gendb.generate_data(include => 'users', 100)")
 	if err == nil {
 		t.Error("expected error for positional arg after named arg")
 	}
@@ -396,18 +408,18 @@ func TestParsePositionalReturnGenerated(t *testing.T) {
 	if cmd.Name != "return_generated" {
 		t.Fatalf("expected return_generated, got %q", cmd.Name)
 	}
-	if cmd.Args["table_name"] != "users" {
-		t.Errorf("got table_name %q, want users", cmd.Args["table_name"])
+	if cmd.Args["include"] != "users" {
+		t.Errorf("got include %q, want users", cmd.Args["include"])
 	}
 }
 
 func TestParseNamedNullOmitted(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => NULL, rows => 100)")
+	cmd, err := Parse("CALL gendb.generate_data(include => NULL, rows => 100)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cmd.Args["include_tables"]; ok {
-		t.Errorf("expected no include_tables for NULL, got %q", cmd.Args["include_tables"])
+	if _, ok := cmd.Args["include"]; ok {
+		t.Errorf("expected no include for NULL, got %q", cmd.Args["include"])
 	}
 	if cmd.Args["rows"] != "100" {
 		t.Errorf("got rows %q, want 100", cmd.Args["rows"])
@@ -415,30 +427,30 @@ func TestParseNamedNullOmitted(t *testing.T) {
 }
 
 func TestParseGenerateDataWithExcludeTables(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(exclude_tables => 'temp*')")
+	cmd, err := Parse("CALL gendb.generate_data(exclude => 'temp*')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["exclude_tables"] != "temp*" {
-		t.Errorf("got exclude_tables %q, want temp*", cmd.Args["exclude_tables"])
+	if cmd.Args["exclude"] != "temp*" {
+		t.Errorf("got exclude %q, want temp*", cmd.Args["exclude"])
 	}
 }
 
 func TestParseGenerateDataWithIncludeAndExclude(t *testing.T) {
-	cmd, err := Parse("CALL gendb.generate_data(include_tables => 'user*', exclude_tables => 'user_logs')")
+	cmd, err := Parse("CALL gendb.generate_data(include => 'user*', exclude => 'user_logs')")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Name != "generate_data" {
 		t.Fatalf("expected generate_data, got %q", cmd.Name)
 	}
-	if cmd.Args["include_tables"] != "user*" {
-		t.Errorf("got include_tables %q, want user*", cmd.Args["include_tables"])
+	if cmd.Args["include"] != "user*" {
+		t.Errorf("got include %q, want user*", cmd.Args["include"])
 	}
-	if cmd.Args["exclude_tables"] != "user_logs" {
-		t.Errorf("got exclude_tables %q, want user_logs", cmd.Args["exclude_tables"])
+	if cmd.Args["exclude"] != "user_logs" {
+		t.Errorf("got exclude %q, want user_logs", cmd.Args["exclude"])
 	}
 }

@@ -6,8 +6,8 @@ var Registry = map[string]*CommandDef{
 		Name: "generate_data", NeedsConn: true,
 		Comment: "Generate synthetic data into the synthetic schema.",
 		Params: []ParamDef{
-			{Name: "include_tables", SQLType: "text", Default: "NULL"},
-			{Name: "exclude_tables", SQLType: "text", Default: "NULL"},
+			{Name: "include", SQLType: "text", Default: "NULL"},
+			{Name: "exclude", SQLType: "text", Default: "NULL"},
 			{Name: "rows", SQLType: "integer", Default: "100"},
 			{Name: "seed", SQLType: "bigint", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
@@ -16,17 +16,19 @@ var Registry = map[string]*CommandDef{
 	},
 	"return_generated": {
 		Name: "return_generated", NeedsConn: true,
-		Comment: "Route queries for a table to generated (synthetic) data.",
+		Comment: "Route queries for one or more tables to generated (synthetic) data.",
 		Params: []ParamDef{
-			{Name: "table_name", Required: true, SQLType: "text"},
+			{Name: "include", SQLType: "text", Default: "NULL"},
+			{Name: "exclude", SQLType: "text", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
 		},
 	},
 	"return_actual": {
 		Name: "return_actual", NeedsConn: true,
-		Comment: "Restore a table to return real data.",
+		Comment: "Restore one or more tables to return real data.",
 		Params: []ParamDef{
-			{Name: "table_name", Required: true, SQLType: "text"},
+			{Name: "include", SQLType: "text", Default: "NULL"},
+			{Name: "exclude", SQLType: "text", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
 		},
 	},
