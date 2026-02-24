@@ -1,6 +1,7 @@
 package lang
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -452,5 +453,104 @@ func TestParseGenerateDataWithIncludeAndExclude(t *testing.T) {
 	}
 	if cmd.Args["exclude"] != "user_logs" {
 		t.Errorf("got exclude %q, want user_logs", cmd.Args["exclude"])
+	}
+}
+
+func TestParseCreateScenarioNamed(t *testing.T) {
+	cmd, err := Parse("CALL gendb.create_scenario(name => 'edge', prompt => 'Use extreme values')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "create_scenario" {
+		t.Fatalf("expected create_scenario, got %q", cmd.Name)
+	}
+	if cmd.Args["name"] != "edge" {
+		t.Errorf("got name %q, want edge", cmd.Args["name"])
+	}
+	if cmd.Args["prompt"] != "Use extreme values" {
+		t.Errorf("got prompt %q, want 'Use extreme values'", cmd.Args["prompt"])
+	}
+}
+
+func TestParseCreateScenarioPositional(t *testing.T) {
+	cmd, err := Parse("CALL gendb.create_scenario('edge', 'Use extreme values')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "create_scenario" {
+		t.Fatalf("expected create_scenario, got %q", cmd.Name)
+	}
+	if cmd.Args["name"] != "edge" {
+		t.Errorf("got name %q, want edge", cmd.Args["name"])
+	}
+	if cmd.Args["prompt"] != "Use extreme values" {
+		t.Errorf("got prompt %q, want 'Use extreme values'", cmd.Args["prompt"])
+	}
+}
+
+func TestParseCreateScenarioNameOnly(t *testing.T) {
+	cmd, err := Parse("CALL gendb.create_scenario(name => 'edge')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "create_scenario" {
+		t.Fatalf("expected create_scenario, got %q", cmd.Name)
+	}
+	if cmd.Args["name"] != "edge" {
+		t.Errorf("got name %q, want edge", cmd.Args["name"])
+	}
+	if _, ok := cmd.Args["prompt"]; ok {
+		t.Errorf("expected no prompt arg, got %q", cmd.Args["prompt"])
+	}
+}
+
+func TestParseUpdateScenarioNamed(t *testing.T) {
+	cmd, err := Parse("CALL gendb.update_scenario(name => 'edge', prompt => 'Updated prompt')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "update_scenario" {
+		t.Fatalf("expected update_scenario, got %q", cmd.Name)
+	}
+	if cmd.Args["name"] != "edge" {
+		t.Errorf("got name %q, want edge", cmd.Args["name"])
+	}
+	if cmd.Args["prompt"] != "Updated prompt" {
+		t.Errorf("got prompt %q, want 'Updated prompt'", cmd.Args["prompt"])
+	}
+}
+
+func TestParseUpdateScenarioPositional(t *testing.T) {
+	cmd, err := Parse("CALL gendb.update_scenario('edge', 'Updated prompt')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "update_scenario" {
+		t.Fatalf("expected update_scenario, got %q", cmd.Name)
+	}
+	if cmd.Args["name"] != "edge" {
+		t.Errorf("got name %q, want edge", cmd.Args["name"])
+	}
+	if cmd.Args["prompt"] != "Updated prompt" {
+		t.Errorf("got prompt %q, want 'Updated prompt'", cmd.Args["prompt"])
+	}
+}
+
+func TestBuildSetupSQL_ScenarioTableSchema(t *testing.T) {
+	sql := BuildSetupSQL()
+
+	// Scenario table should have an autoincrement PK and name as varchar(255) unique.
+	if !strings.Contains(sql, "id BIGSERIAL PRIMARY KEY") {
+		t.Error("scenario table should have id BIGSERIAL PRIMARY KEY")
+	}
+	if !strings.Contains(sql, "name VARCHAR(255) NOT NULL UNIQUE") {
+		t.Error("scenario table should have name VARCHAR(255) NOT NULL UNIQUE")
+	}
+	// History table FK should reference scenario(id) not scenario(name).
+	if strings.Contains(sql, "REFERENCES gendb.scenario(name)") {
+		t.Error("history table should not reference scenario(name)")
+	}
+	if !strings.Contains(sql, "scenario_id BIGINT REFERENCES gendb.scenario(id)") {
+		t.Error("history table should have scenario_id BIGINT REFERENCES gendb.scenario(id)")
 	}
 }

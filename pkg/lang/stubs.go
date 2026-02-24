@@ -76,12 +76,25 @@ func BuildSetupSQL() string {
 	b.WriteString(" current_setting('gendb.info.structured_output', true)::boolean AS structured_output;\n")
 	b.WriteString("COMMENT ON VIEW gendb.info IS 'GenDB proxy instance information (version, LLM configuration).';\n")
 
+	// Drop tables in FK order, then recreate.
+	b.WriteString("\nDROP TABLE IF EXISTS gendb.history;\n")
+	b.WriteString("DROP TABLE IF EXISTS gendb.scenario;\n")
+
+	// Scenario table for first-class scenario management.
+	b.WriteString("\nCREATE TABLE gendb.scenario (\n")
+	b.WriteString("    id BIGSERIAL PRIMARY KEY,\n")
+	b.WriteString("    name VARCHAR(255) NOT NULL UNIQUE,\n")
+	b.WriteString("    prompt TEXT\n")
+	b.WriteString(");\n")
+	b.WriteString("COMMENT ON TABLE gendb.scenario IS 'Named scenarios with optional prompts that are automatically included in data generation.';\n")
+	b.WriteString("INSERT INTO gendb.scenario (name) VALUES ('default') ON CONFLICT DO NOTHING;\n")
+
 	// History table for tracking operations.
-	b.WriteString("\nCREATE TABLE IF NOT EXISTS gendb.history (\n")
+	b.WriteString("\nCREATE TABLE gendb.history (\n")
 	b.WriteString("    id BIGSERIAL PRIMARY KEY,\n")
 	b.WriteString("    executed_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n")
 	b.WriteString("    operation TEXT NOT NULL,\n")
-	b.WriteString("    scenario TEXT,\n")
+	b.WriteString("    scenario_id BIGINT REFERENCES gendb.scenario(id),\n")
 	b.WriteString("    details JSONB,\n")
 	b.WriteString("    status TEXT NOT NULL,\n")
 	b.WriteString("    error_message TEXT,\n")

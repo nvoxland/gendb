@@ -49,6 +49,22 @@ var Registry = map[string]*CommandDef{
 			{Name: "schema", SQLType: "text", Default: "NULL"},
 		},
 	},
+	"create_scenario": {
+		Name: "create_scenario", NeedsConn: true,
+		Comment: "Create a new named scenario with an optional prompt.",
+		Params: []ParamDef{
+			{Name: "name", Required: true, SQLType: "text"},
+			{Name: "prompt", SQLType: "text", Default: "NULL"},
+		},
+	},
+	"update_scenario": {
+		Name: "update_scenario", NeedsConn: true,
+		Comment: "Update the prompt for an existing scenario.",
+		Params: []ParamDef{
+			{Name: "name", Required: true, SQLType: "text"},
+			{Name: "prompt", SQLType: "text", Default: "NULL"},
+		},
+	},
 }
 
 // Aliases maps alternative command names to their canonical names.

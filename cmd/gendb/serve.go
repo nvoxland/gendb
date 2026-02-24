@@ -83,6 +83,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	lang.RegisterHandler("return_generated", handleReturnGenerated)
 	lang.RegisterHandler("return_actual", handleReturnActual)
 	lang.RegisterHandler("drop_scenario", handleDropScenario)
+	lang.RegisterHandler("create_scenario", handleCreateScenario)
+	lang.RegisterHandler("update_scenario", handleUpdateScenario)
 
 	p := proxy.New(proxy.Config{
 		ListenAddr:       fmt.Sprintf(":%d", servePort),
@@ -143,6 +145,15 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 		rows = appConfig.Generation.DefaultRows
 	}
 
+	// Look up scenario prompt from the scenario table.
+	var scenarioPrompt *string
+	err := conn.QueryRow(ctx,
+		"SELECT prompt FROM gendb.scenario WHERE name = $1", scenario,
+	).Scan(&scenarioPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("scenario %q not found: create it with gendb.create_scenario()", scenario)
+	}
+
 	defer func() {
 		status, errMsg := "success", ""
 		if retErr != nil {
@@ -152,6 +163,7 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 			"include": include,
 			"exclude": exclude,
 			"rows":    rows,
+			"prompt":  args["prompt"],
 		}
 		recordHistory(ctx, conn, "generate_data", scenario, details, status, errMsg, time.Since(startTime))
 	}()
@@ -165,7 +177,6 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 	// 1. Schema inspection (sync, using session pgxConn)
 	inspector := schema.NewInspectorFromConn(conn)
 
-	var err error
 	var sg *schema.SchemaGraph
 	if include != "" && !strings.ContainsAny(include, "*?") {
 		// Exact table name — use direct inspection
@@ -246,8 +257,8 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 			generator.WithInspector(inspector),
 			generator.WithSampleData(includeSampleData),
 		)
-		if userPrompt := args["prompt"]; userPrompt != "" {
-			genOpts = append(genOpts, generator.WithUserPrompt(userPrompt))
+		if combined := mergePrompts(scenarioPrompt, args["prompt"]); combined != "" {
+			genOpts = append(genOpts, generator.WithUserPrompt(combined))
 		}
 
 		gen, err := generator.New(appLLMClient, genCfg, genOpts...)
@@ -583,8 +594,8 @@ func logTokenUsage(ctx context.Context, client *llm.Client) {
 func recordHistory(ctx context.Context, conn *pgx.Conn, operation, scenario string, details map[string]any, status string, errMsg string, duration time.Duration) {
 	detailsJSON, _ := json.Marshal(details)
 	_, err := conn.Exec(ctx,
-		`INSERT INTO gendb.history (operation, scenario, details, status, error_message, duration_ms)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO gendb.history (operation, scenario_id, details, status, error_message, duration_ms)
+		 VALUES ($1, (SELECT id FROM gendb.scenario WHERE name = $2), $3, $4, $5, $6)`,
 		operation, scenario, detailsJSON, status, errMsg, duration.Milliseconds())
 	if err != nil {
 		slog.Warn("Failed to record history", "error", err)
@@ -659,4 +670,66 @@ func handleDropScenario(ctx context.Context, args map[string]string) (result *la
 
 	slog.Info("drop_scenario complete", "scenario", scenario, "tables_dropped", len(toDrop))
 	return &lang.Result{Tag: fmt.Sprintf("GENDB DROP SCENARIO %s (%d tables)", scenario, len(toDrop))}, nil
+}
+
+func handleCreateScenario(ctx context.Context, args map[string]string) (*lang.Result, error) {
+	conn := proxy.ConnFromContext(ctx)
+	if conn == nil {
+		return nil, fmt.Errorf("no database connection available")
+	}
+
+	name := args["name"]
+	prompt := nilIfEmpty(args["prompt"])
+
+	_, err := conn.Exec(ctx,
+		"INSERT INTO gendb.scenario (name, prompt) VALUES ($1, $2)",
+		name, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("creating scenario %q: %w", name, err)
+	}
+
+	return &lang.Result{Tag: fmt.Sprintf("GENDB CREATE SCENARIO %s", name)}, nil
+}
+
+func handleUpdateScenario(ctx context.Context, args map[string]string) (*lang.Result, error) {
+	conn := proxy.ConnFromContext(ctx)
+	if conn == nil {
+		return nil, fmt.Errorf("no database connection available")
+	}
+
+	name := args["name"]
+	prompt := nilIfEmpty(args["prompt"])
+
+	ct, err := conn.Exec(ctx,
+		"UPDATE gendb.scenario SET prompt = $1 WHERE name = $2",
+		prompt, name)
+	if err != nil {
+		return nil, fmt.Errorf("updating scenario %q: %w", name, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return nil, fmt.Errorf("scenario %q not found: create it with gendb.create_scenario()", name)
+	}
+
+	return &lang.Result{Tag: fmt.Sprintf("GENDB UPDATE SCENARIO %s", name)}, nil
+}
+
+// mergePrompts combines a scenario prompt and user prompt, joining with a
+// blank line when both are present.
+func mergePrompts(scenarioPrompt *string, userPrompt string) string {
+	var parts []string
+	if scenarioPrompt != nil && *scenarioPrompt != "" {
+		parts = append(parts, *scenarioPrompt)
+	}
+	if userPrompt != "" {
+		parts = append(parts, userPrompt)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// nilIfEmpty returns nil for an empty string, or a pointer to the string.
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

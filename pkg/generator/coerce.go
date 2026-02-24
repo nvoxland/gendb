@@ -35,6 +35,11 @@ func coerceValue(v any, col *schema.Column) (any, error) {
 		return nil, nil
 	}
 
+	// Unwrap single-element slices (LLM sometimes wraps scalars in arrays)
+	if slice, ok := v.([]interface{}); ok && len(slice) == 1 {
+		v = slice[0]
+	}
+
 	dt := strings.ToLower(col.DataType)
 
 	switch {
