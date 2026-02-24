@@ -25,6 +25,7 @@ type Generator struct {
 	progressFunc      ProgressFunc
 	inspector         *schema.Inspector
 	includeSampleData bool
+	userPrompt        string
 }
 
 // Option configures a Generator.
@@ -55,6 +56,13 @@ func WithProgressFunc(fn ProgressFunc) Option {
 func WithInspector(insp *schema.Inspector) Option {
 	return func(g *Generator) {
 		g.inspector = insp
+	}
+}
+
+// WithUserPrompt sets free-form user instructions that are appended to the LLM prompt.
+func WithUserPrompt(prompt string) Option {
+	return func(g *Generator) {
+		g.userPrompt = prompt
 	}
 }
 
@@ -172,6 +180,7 @@ func (g *Generator) Generate(ctx context.Context, sg *schema.SchemaGraph, target
 			UniqueColumns:      table.UniqueColumns(),
 			Stats:              tableStats,
 			SampleRows:         sampleRows,
+			UserPrompt:         g.userPrompt,
 		}
 
 		generatedRows, err := g.llmClient.GenerateTableData(ctx, req)

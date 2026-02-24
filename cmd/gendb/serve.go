@@ -239,12 +239,18 @@ func handleGenerate(ctx context.Context, args map[string]string) (result *lang.R
 			genCfg.DefaultRows = rows
 		}
 
-		gen, err := generator.New(appLLMClient, genCfg,
+		var genOpts []generator.Option
+		genOpts = append(genOpts,
 			generator.WithTargetSchema(synthetic.SchemaName),
 			generator.WithTableNameMapper(mapper),
 			generator.WithInspector(inspector),
 			generator.WithSampleData(includeSampleData),
 		)
+		if userPrompt := args["prompt"]; userPrompt != "" {
+			genOpts = append(genOpts, generator.WithUserPrompt(userPrompt))
+		}
+
+		gen, err := generator.New(appLLMClient, genCfg, genOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("creating generator: %w", err)
 		}

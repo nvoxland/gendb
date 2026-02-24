@@ -12,6 +12,7 @@ var Registry = map[string]*CommandDef{
 			{Name: "seed", SQLType: "bigint", Default: "NULL"},
 			{Name: "scenario", SQLType: "text", Default: "'default'"},
 			{Name: "include_sample_data", SQLType: "boolean", Default: "true"},
+			{Name: "prompt", SQLType: "text", Default: "NULL"},
 		},
 	},
 	"return_generated": {

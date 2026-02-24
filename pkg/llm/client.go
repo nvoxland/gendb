@@ -106,6 +106,7 @@ type TableDataRequest struct {
 	PreviousRows       []map[string]any  // for multi-chunk consistency
 	Stats              *schema.TableStats
 	SampleRows         []map[string]any
+	UserPrompt         string // free-form user instructions appended to the LLM prompt
 }
 
 const defaultChunkSize = 50
@@ -497,6 +498,11 @@ func buildPrompt(req TableDataRequest, count int) string {
 	if len(req.PreviousRows) > 0 {
 		sample, _ := json.Marshal(req.PreviousRows)
 		fmt.Fprintf(&b, "Previous rows (maintain consistency in style and values):\n%s\n\n", string(sample))
+	}
+
+	// User-supplied prompt
+	if req.UserPrompt != "" {
+		fmt.Fprintf(&b, "Additional instructions from the user:\n%s\n\n", req.UserPrompt)
 	}
 
 	fmt.Fprintf(&b, "Return ONLY a JSON array of %d row objects. Each object should have keys matching the column names above. Respect data types and constraints. Generate realistic, semantically coherent data.", count)
